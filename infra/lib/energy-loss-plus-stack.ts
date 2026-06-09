@@ -17,8 +17,8 @@ export class EnergyLossPlusStack extends Stack {
     });
     const webauthnOrigin = new CfnParameter(this, "WebauthnOrigin", {
       type: "String",
-      default: "http://localhost:1420",
-      description: "Browser origin allowed for Passkey ceremonies."
+      default: "tauri://localhost",
+      description: "Client origin allowed for Passkey ceremonies. Packaged iOS Tauri apps use tauri://localhost."
     });
     const webauthnRpName = new CfnParameter(this, "WebauthnRpName", {
       type: "String",

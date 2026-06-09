@@ -50,6 +50,10 @@ jobs:
             echo "::error::API_BASE_URL must use HTTPS for an iOS release build."
             exit 1
           fi
+          if [[ "$API_BASE_URL" == *"{"* || "$API_BASE_URL" == *"}"* || "$API_BASE_URL" == *"proxy+"* ]]; then
+            echo "::error::API_BASE_URL must be the API base endpoint without the API Gateway /{proxy+} route placeholder."
+            exit 1
+          fi
           echo "VITE_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
           echo "ENERGY_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
 

@@ -12,7 +12,7 @@ describe("Passkey API errors", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Load failed")));
 
     await expect(loginWithPasskey("new-user")).rejects.toThrow(
-      "Check the iOS build API_BASE_URL setting"
+      "Check API_BASE_URL and the API CORS origin"
     );
   });
 });

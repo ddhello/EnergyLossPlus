@@ -49,6 +49,14 @@ For the unsigned iOS GitHub Actions build, set the repository Actions variable
 the `api_base_url` input. The workflow injects the value into both client settings
 and fails before building when it is missing.
 
+Use only the API base endpoint, such as
+`https://example.execute-api.us-east-1.amazonaws.com`. Do not append the API
+Gateway route placeholder `/{proxy+}`.
+
+Packaged iOS Tauri apps use the `tauri://localhost` origin. Deploy the CDK stack
+with `WebauthnOrigin=tauri://localhost`; otherwise API Gateway CORS blocks the
+Passkey challenge request and iOS reports `Load failed`.
+
 ## Authentication boundary
 
 The app only exposes Passkey/WebAuthn registration and login flows. No password, email-code, SMS, or OAuth fallback is implemented. The Lambda service uses Rust-side WebAuthn ceremony handling, stores registered passkey credentials in DynamoDB, and issues short-lived bearer sessions after successful assertion verification.

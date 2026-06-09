@@ -51,7 +51,10 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to reach the EnergyLossPlus API at ${API_BASE}. Check the iOS build API_BASE_URL setting. ${detail}`);
+    throw new Error(
+      `Unable to reach the EnergyLossPlus API at ${API_BASE} from ${window.location.origin}. ` +
+      `Check API_BASE_URL and the API CORS origin. ${detail}`
+    );
   }
   if (!response.ok) {
     throw new Error(await response.text());
