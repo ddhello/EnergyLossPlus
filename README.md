@@ -44,6 +44,11 @@ After deployment, use the CDK `ApiUrl` output as the client API base:
 - `VITE_API_BASE_URL`: used by the React Passkey challenge/finish calls.
 - `ENERGY_API_BASE_URL`: used by the Tauri Rust API client for snapshot and diary writes.
 
+For the unsigned iOS GitHub Actions build, set the repository Actions variable
+`API_BASE_URL` to that HTTPS `ApiUrl`. A manual workflow run can instead provide
+the `api_base_url` input. The workflow injects the value into both client settings
+and fails before building when it is missing.
+
 ## Authentication boundary
 
 The app only exposes Passkey/WebAuthn registration and login flows. No password, email-code, SMS, or OAuth fallback is implemented. The Lambda service uses Rust-side WebAuthn ceremony handling, stores registered passkey credentials in DynamoDB, and issues short-lived bearer sessions after successful assertion verification.

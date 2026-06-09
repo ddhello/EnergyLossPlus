@@ -2,6 +2,11 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: HTTPS base URL of the deployed EnergyLossPlus API
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -32,6 +37,21 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Configure API URL
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url || vars.API_BASE_URL }}
+        run: |
+          if [[ -z "$API_BASE_URL" ]]; then
+            echo "::error::Set the repository Actions variable API_BASE_URL, or provide api_base_url when manually running this workflow."
+            exit 1
+          fi
+          if [[ "$API_BASE_URL" != https://* ]]; then
+            echo "::error::API_BASE_URL must use HTTPS for an iOS release build."
+            exit 1
+          fi
+          echo "VITE_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
+          echo "ENERGY_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
 
       - name: Initialize iOS project
         working-directory: apps/desktop

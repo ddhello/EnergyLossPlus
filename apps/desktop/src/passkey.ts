@@ -1,6 +1,6 @@
 import type { Session } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 interface ChallengeResponse {
   challengeId: string;
@@ -42,11 +42,17 @@ export async function loginWithPasskey(nickname: string): Promise<Session> {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to reach the EnergyLossPlus API at ${API_BASE}. Check the iOS build API_BASE_URL setting. ${detail}`);
+  }
   if (!response.ok) {
     throw new Error(await response.text());
   }
