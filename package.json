@@ -1,0 +1,19 @@
+{
+  "name": "energy-loss-plus",
+  "version": "0.1.1",
+  "private": true,
+  "workspaces": [
+    "apps/desktop",
+    "infra"
+  ],
+  "scripts": {
+    "dev": "npm --workspace apps/desktop run dev",
+    "tauri:dev": "npm --workspace apps/desktop run tauri:dev",
+    "build": "npm --workspace apps/desktop run build",
+    "test": "npm --workspace apps/desktop run test",
+    "infra:synth": "npm --workspace infra run synth",
+    "infra:deploy": "npm --workspace infra run deploy",
+    "rust:test": "cargo test --workspace",
+    "rust:check": "cargo check --workspace"
+  }
+}

@@ -1,0 +1,56 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize iOS project
+        working-directory: apps/desktop
+        run: npx tauri ios init --ci
+
+      - name: Build unsigned IPA
+        working-directory: apps/desktop
+        run: npx tauri ios build --no-sign
+
+      - name: Collect IPA
+        run: |
+          mkdir -p artifacts
+          find apps/desktop/src-tauri/gen/apple/build -type f -name "*.ipa" -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -type f -name '*.ipa' -print -quit)"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnergyLossPlus-unsigned-ios
+          path: artifacts/*.ipa
+          if-no-files-found: error
+          retention-days: 14
