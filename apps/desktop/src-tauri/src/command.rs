@@ -58,6 +58,29 @@ pub fn clear_session(app: AppHandle) -> Result<(), CommandError> {
 }
 
 #[tauri::command]
+pub async fn auth_post(
+    path: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, CommandError> {
+    const ALLOWED_PATHS: [&str; 4] = [
+        "/auth/register/start",
+        "/auth/register/finish",
+        "/auth/login/start",
+        "/auth/login/finish",
+    ];
+    if !ALLOWED_PATHS.contains(&path.as_str()) {
+        return Err(CommandError::Network(
+            "unsupported Passkey API path".to_string(),
+        ));
+    }
+
+    ApiClient::from_env()
+        .auth_post(&path, &body)
+        .await
+        .map_err(|error| CommandError::Network(error.to_string()))
+}
+
+#[tauri::command]
 pub async fn update_goal(
     app: AppHandle,
     token: String,

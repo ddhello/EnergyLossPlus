@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "synth": "cdk synth",
-    "deploy": "cdk deploy"
+    "deploy": "cdk deploy",
+    "deploy:ios": "cdk deploy EnergyLossPlusStack --parameters EnergyLossPlusStack:WebauthnOrigin=tauri://localhost --parameters EnergyLossPlusStack:WebauthnRpId=localhost"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.170.0",

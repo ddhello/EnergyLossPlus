@@ -2,7 +2,7 @@ use crate::cache::CachedSnapshot;
 use anyhow::Context;
 use energy_core::ProfileInput;
 use reqwest::header::AUTHORIZATION;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 
 pub struct ApiClient {
     base_url: String,
@@ -39,6 +39,30 @@ impl ApiClient {
             .json::<CachedSnapshot>()
             .await
             .context("failed to decode snapshot")
+    }
+
+    pub async fn auth_post<T>(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let response = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .json(body)
+            .send()
+            .await
+            .context("failed to contact EnergyLossPlus API")?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .context("failed to read EnergyLossPlus API response")?;
+
+        if !status.is_success() {
+            anyhow::bail!("Passkey API request failed with {status}: {text}");
+        }
+
+        serde_json::from_str(&text).context("failed to decode Passkey API response")
     }
 
     pub async fn update_goal(

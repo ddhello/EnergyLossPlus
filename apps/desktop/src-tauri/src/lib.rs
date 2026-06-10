@@ -11,6 +11,7 @@ pub fn run() {
             command::sync_snapshot,
             command::save_session,
             command::clear_session,
+            command::auth_post,
             command::update_goal,
             command::create_food,
             command::create_exercise,

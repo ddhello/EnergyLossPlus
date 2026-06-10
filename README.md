@@ -57,6 +57,12 @@ Packaged iOS Tauri apps use the `tauri://localhost` origin. Deploy the CDK stack
 with `WebauthnOrigin=tauri://localhost`; otherwise API Gateway CORS blocks the
 Passkey challenge request and iOS reports `Load failed`.
 
+Deploy the iOS API configuration with:
+
+```powershell
+npm run infra:deploy:ios
+```
+
 ## Authentication boundary
 
 The app only exposes Passkey/WebAuthn registration and login flows. No password, email-code, SMS, or OAuth fallback is implemented. The Lambda service uses Rust-side WebAuthn ceremony handling, stores registered passkey credentials in DynamoDB, and issues short-lived bearer sessions after successful assertion verification.

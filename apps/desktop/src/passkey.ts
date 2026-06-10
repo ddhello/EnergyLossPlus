@@ -1,6 +1,8 @@
 import type { Session } from "./types";
+import { invoke } from "@tauri-apps/api/core";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
+const isTauri = "__TAURI_INTERNALS__" in window;
 
 interface ChallengeResponse {
   challengeId: string;
@@ -42,6 +44,10 @@ export async function loginWithPasskey(nickname: string): Promise<Session> {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
+  if (isTauri) {
+    return invoke<T>("auth_post", { path, body });
+  }
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {

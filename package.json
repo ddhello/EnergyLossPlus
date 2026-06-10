@@ -13,6 +13,7 @@
     "test": "npm --workspace apps/desktop run test",
     "infra:synth": "npm --workspace infra run synth",
     "infra:deploy": "npm --workspace infra run deploy",
+    "infra:deploy:ios": "npm --workspace infra run deploy:ios",
     "rust:test": "cargo test --workspace",
     "rust:check": "cargo check --workspace"
   }
