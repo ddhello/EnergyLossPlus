@@ -54,6 +54,7 @@ struct AppFinishRequest {
     credential: serde_json::Value,
     state: String,
     code_challenge: String,
+    callback_origin: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +189,7 @@ async fn app_register_finish(event: Request, state: AppState) -> Result<Response
         create_session(&account),
         input.state,
         input.code_challenge,
+        input.callback_origin,
     )
     .await
 }
@@ -230,6 +232,7 @@ async fn app_login_finish(event: Request, state: AppState) -> Result<Response<Bo
         create_session(&account),
         input.state,
         input.code_challenge,
+        input.callback_origin,
     )
     .await
 }
@@ -239,6 +242,7 @@ async fn issue_app_code(
     session: Session,
     callback_state: String,
     code_challenge: String,
+    callback_origin: Option<String>,
 ) -> Result<Response<Body>, Error> {
     if callback_state.len() < 16
         || callback_state.len() > 256
@@ -255,10 +259,16 @@ async fn issue_app_code(
         expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     };
     state.store.put_json("app-code", &code, &record).await?;
+    let callback_url = match callback_origin {
+        Some(origin) if web_origin_is_allowed(&origin) => {
+            format!("{origin}/?code={code}&state={callback_state}")
+        }
+        _ => format!("energylossplus://auth/callback?code={code}&state={callback_state}"),
+    };
     json_response(
         200,
         &serde_json::json!({
-            "callbackUrl": format!("energylossplus://auth/callback?code={code}&state={callback_state}")
+            "callbackUrl": callback_url
         }),
     )
 }
@@ -795,6 +805,13 @@ fn cors_origin() -> String {
     std::env::var("WEBAUTHN_ORIGIN").unwrap_or_else(|_| "http://localhost:1420".to_string())
 }
 
+fn web_origin_is_allowed(origin: &str) -> bool {
+    std::env::var("WEB_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .any(|allowed| !allowed.is_empty() && allowed == origin)
+}
+
 fn nickname_pk(nickname: &str) -> String {
     format!("nickname#{}", nickname.trim().to_lowercase())
 }
@@ -916,5 +933,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.code_verifier, "verifier");
+    }
+
+    #[test]
+    fn allows_only_configured_web_callback_origins() {
+        std::env::set_var(
+            "WEB_ORIGINS",
+            "https://energylossplus.erasereat.workers.dev,https://energy.114522.xyz",
+        );
+
+        assert!(web_origin_is_allowed("https://energy.114522.xyz"));
+        assert!(!web_origin_is_allowed("https://evil.example"));
     }
 }

@@ -8,9 +8,10 @@ const API_BASE = (
 ).replace(/\/+$/, "");
 const stateKey = "energylossplus.externalAuthState";
 const verifierKey = "energylossplus.externalAuthVerifier";
+const isTauri = "__TAURI_INTERNALS__" in window;
 
 export function isExternalAuthAvailable(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return isTauri || (!import.meta.env.DEV && window.location.protocol === "https:");
 }
 
 export async function startExternalAuth(
@@ -24,7 +25,12 @@ export async function startExternalAuth(
   window.localStorage.setItem(verifierKey, verifier);
   const codeChallenge = await pkceChallenge(verifier);
   const query = new URLSearchParams({ state, mode, nickname, deviceName, codeChallenge });
-  await openUrl(`${API_BASE}/auth/app?${query}`);
+  if (isTauri) {
+    await openUrl(`${API_BASE}/auth/app?${query}`);
+  } else {
+    query.set("callbackOrigin", window.location.origin);
+    window.location.assign(`${API_BASE}/auth/app?${query}`);
+  }
 }
 
 export async function listenForExternalAuth(
@@ -36,15 +42,23 @@ export async function listenForExternalAuth(
       void handleCallback(url).then(onSession).catch(onError);
     }
   };
-  const unlisten = await onOpenUrl(handleUrls);
-  const current = await getCurrent();
-  if (current) handleUrls(current);
-  return unlisten;
+  if (isTauri) {
+    const unlisten = await onOpenUrl(handleUrls);
+    const current = await getCurrent();
+    if (current) handleUrls(current);
+    return unlisten;
+  }
+  if (new URL(window.location.href).searchParams.has("code")) {
+    handleUrls([window.location.href]);
+  }
+  return () => {};
 }
 
 async function handleCallback(value: string): Promise<Session> {
   const url = new URL(value);
-  if (url.protocol !== "energylossplus:" || url.host !== "auth" || url.pathname !== "/callback") {
+  const isAppCallback = url.protocol === "energylossplus:" && url.host === "auth" && url.pathname === "/callback";
+  const isWebCallback = url.origin === window.location.origin;
+  if (!isAppCallback && !isWebCallback) {
     throw new Error("收到无效的登录回调。");
   }
   const code = url.searchParams.get("code");
@@ -56,10 +70,20 @@ async function handleCallback(value: string): Promise<Session> {
   }
   window.localStorage.removeItem(stateKey);
   window.localStorage.removeItem(verifierKey);
-  return invoke<Session>("auth_post", {
-    path: "/auth/app/exchange",
-    body: { code, state, codeVerifier }
+  if (isTauri) {
+    return invoke<Session>("auth_post", {
+      path: "/auth/app/exchange",
+      body: { code, state, codeVerifier }
+    });
+  }
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+  const response = await fetch(`${API_BASE}/auth/app/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code, state, codeVerifier })
   });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<Session>;
 }
 
 function randomState(): string {

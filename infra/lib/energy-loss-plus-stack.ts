@@ -6,6 +6,12 @@ import { Architecture, Code, Function, Runtime } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import { join } from "node:path";
 
+const webOrigins = [
+  "https://energylossplus.erasereat.workers.dev",
+  "https://energy.114522.xyz",
+  "https://energy.mipa.moe"
+];
+
 export class EnergyLossPlusStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -48,7 +54,8 @@ export class EnergyLossPlusStack extends Stack {
         RUST_LOG: "info",
         WEBAUTHN_RP_ID: webauthnRpId.valueAsString,
         WEBAUTHN_RP_NAME: webauthnRpName.valueAsString,
-        WEBAUTHN_ORIGIN: webauthnOrigin.valueAsString
+        WEBAUTHN_ORIGIN: webauthnOrigin.valueAsString,
+        WEB_ORIGINS: webOrigins.join(",")
       }
     });
 
@@ -64,7 +71,7 @@ export class EnergyLossPlusStack extends Stack {
           CorsHttpMethod.PUT,
           CorsHttpMethod.DELETE
         ],
-        allowOrigins: [webauthnOrigin.valueAsString]
+        allowOrigins: [webauthnOrigin.valueAsString, ...webOrigins]
       }
     });
     const integration = new HttpLambdaIntegration("ApiIntegration", apiFunction);

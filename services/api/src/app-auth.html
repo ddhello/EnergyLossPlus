@@ -16,7 +16,7 @@ body{background:#e8f0eb;color:#17231c;font:16px system-ui;margin:0;padding:32px 
   <div class="notice" id="notice">等待操作</div>
 </main>
 <script>
-const params=new URLSearchParams(location.search),state=params.get("state"),codeChallenge=params.get("codeChallenge"),notice=document.querySelector("#notice");
+const params=new URLSearchParams(location.search),state=params.get("state"),codeChallenge=params.get("codeChallenge"),callbackOrigin=params.get("callbackOrigin"),notice=document.querySelector("#notice");
 document.querySelector("#nickname").value=params.get("nickname")||"new-user";
 document.querySelector("#device").value=params.get("deviceName")||"iPhone";
 notice.textContent=params.get("mode")==="register"?"请点击“创建 Passkey”继续。":"请点击“使用 Passkey 登录”继续。";
@@ -28,7 +28,7 @@ async function authenticate(mode){
     const start=await post(`/auth/${mode}/start`,mode==="register"?{nickname,deviceName}:{nickname});
     const options=revive(start.publicKey);
     const credential=mode==="register"?await navigator.credentials.create({publicKey:options}):await navigator.credentials.get({publicKey:options});
-    const finish=await post(`/auth/app/${mode}/finish`,{challengeId:start.challengeId,credential:serialize(credential),state,codeChallenge});
+    const finish=await post(`/auth/app/${mode}/finish`,{challengeId:start.challengeId,credential:serialize(credential),state,codeChallenge,callbackOrigin});
     notice.textContent="登录成功，正在返回 App…";
     location.href=finish.callbackUrl;
   }catch(error){notice.textContent=error?.message||String(error)}
