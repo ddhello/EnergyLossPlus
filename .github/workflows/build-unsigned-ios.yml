@@ -80,22 +80,45 @@ jobs:
           rm -rf /tmp/energylossplus-ipa
           mkdir -p /tmp/energylossplus-ipa
           unzip -q "$IPA" -d /tmp/energylossplus-ipa
-          PLIST="$(find /tmp/energylossplus-ipa/Payload -type f -name Info.plist -print -quit)"
-          test -n "$PLIST"
-          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.energylossplus.desktop" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string energylossplus" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" "$PLIST" | grep -q "energylossplus"
+          PLISTS=(/tmp/energylossplus-ipa/Payload/*.app/Info.plist)
+          PLIST="${PLISTS[0]}"
+          test -f "$PLIST"
+          python3 - "$PLIST" <<'PY'
+          import plistlib
+          import sys
+
+          path = sys.argv[1]
+          with open(path, "rb") as file:
+              info = plistlib.load(file)
+          info["CFBundleURLTypes"] = [{
+              "CFBundleURLName": "com.energylossplus.desktop",
+              "CFBundleURLSchemes": ["energylossplus"],
+          }]
+          with open(path, "wb") as file:
+              plistlib.dump(info, file, fmt=plistlib.FMT_BINARY)
+          with open(path, "rb") as file:
+              assert plistlib.load(file)["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["energylossplus"]
+          PY
           rm "$IPA"
           (
             cd /tmp/energylossplus-ipa
             zip -qry "$GITHUB_WORKSPACE/$IPA" Payload
           )
-          unzip -p "$IPA" Payload/*.app/Info.plist > /tmp/final-info.plist
-          /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" /tmp/final-info.plist | grep -q "energylossplus"
+          rm -rf /tmp/energylossplus-final
+          mkdir -p /tmp/energylossplus-final
+          unzip -q "$IPA" -d /tmp/energylossplus-final
+          FINAL_PLISTS=(/tmp/energylossplus-final/Payload/*.app/Info.plist)
+          FINAL_PLIST="${FINAL_PLISTS[0]}"
+          test -f "$FINAL_PLIST"
+          python3 - "$FINAL_PLIST" <<'PY'
+          import plistlib
+          import sys
+
+          with open(sys.argv[1], "rb") as file:
+              info = plistlib.load(file)
+          assert info["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["energylossplus"]
+          print("Verified URL scheme:", info["CFBundleURLTypes"][0]["CFBundleURLSchemes"][0])
+          PY
 
       - name: Collect IPA
         run: |
