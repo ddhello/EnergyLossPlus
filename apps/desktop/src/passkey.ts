@@ -16,9 +16,11 @@ export function isPasskeyAvailable(): boolean {
 export async function registerWithPasskey(nickname: string, deviceName: string): Promise<Session> {
   ensurePasskeyAvailable();
   const challenge = await post<ChallengeResponse>("/auth/register/start", { nickname, deviceName });
-  const credential = await navigator.credentials.create({
-    publicKey: revivePublicKeyOptions(challenge.publicKey) as PublicKeyCredentialCreationOptions
-  });
+  const credential = await runCredentialCeremony("registration", () =>
+    navigator.credentials.create({
+      publicKey: revivePublicKeyOptions(challenge.publicKey) as PublicKeyCredentialCreationOptions
+    })
+  );
   if (!credential) {
     throw new Error("Passkey registration was cancelled.");
   }
@@ -31,9 +33,11 @@ export async function registerWithPasskey(nickname: string, deviceName: string):
 export async function loginWithPasskey(nickname: string): Promise<Session> {
   ensurePasskeyAvailable();
   const challenge = await post<ChallengeResponse>("/auth/login/start", { nickname });
-  const credential = await navigator.credentials.get({
-    publicKey: revivePublicKeyOptions(challenge.publicKey) as PublicKeyCredentialRequestOptions
-  });
+  const credential = await runCredentialCeremony("login", () =>
+    navigator.credentials.get({
+      publicKey: revivePublicKeyOptions(challenge.publicKey) as PublicKeyCredentialRequestOptions
+    })
+  );
   if (!credential) {
     throw new Error("Passkey login was cancelled.");
   }
@@ -72,6 +76,37 @@ function ensurePasskeyAvailable(): void {
   if (!isPasskeyAvailable()) {
     throw new Error("This runtime does not support Passkey.");
   }
+}
+
+async function runCredentialCeremony(
+  action: "registration" | "login",
+  ceremony: () => Promise<Credential | null>
+): Promise<Credential | null> {
+  try {
+    return await ceremony();
+  } catch (error) {
+    throw new Error(
+      `Passkey ${action} failed at ${window.location.origin}: ${errorMessage(error)}`
+    );
+  }
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.name && error.name !== "Error" ? `${error.name}: ${error.message}` : error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const value = error as { name?: unknown; message?: unknown };
+    const name = typeof value.name === "string" ? value.name : "";
+    const message = typeof value.message === "string" ? value.message : "";
+    if (name || message) {
+      return [name, message].filter(Boolean).join(": ");
+    }
+  }
+  return String(error);
 }
 
 function revivePublicKeyOptions(

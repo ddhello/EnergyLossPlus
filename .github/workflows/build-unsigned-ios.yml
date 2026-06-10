@@ -35,6 +35,14 @@ jobs:
         with:
           targets: aarch64-apple-ios
 
+      - name: Cache Rust and iOS build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+          cache-on-failure: true
+          shared-key: unsigned-ios
+
       - name: Install dependencies
         run: npm ci
 

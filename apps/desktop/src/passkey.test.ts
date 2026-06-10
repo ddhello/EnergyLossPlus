@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loginWithPasskey } from "./passkey";
+import { errorMessage, loginWithPasskey } from "./passkey";
 
 describe("Passkey API errors", () => {
   afterEach(() => {
@@ -13,6 +13,16 @@ describe("Passkey API errors", () => {
 
     await expect(loginWithPasskey("new-user")).rejects.toThrow(
       "Check API_BASE_URL and the API CORS origin"
+    );
+  });
+
+  it("preserves string errors returned by Tauri invoke", () => {
+    expect(errorMessage("unknown passkey user")).toBe("unknown passkey user");
+  });
+
+  it("includes DOMException names in credential errors", () => {
+    expect(errorMessage(new DOMException("RP ID mismatch", "SecurityError"))).toBe(
+      "SecurityError: RP ID mismatch"
     );
   });
 });

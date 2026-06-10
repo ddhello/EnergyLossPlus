@@ -12,7 +12,7 @@ import {
   Utensils
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { isPasskeyAvailable, loginWithPasskey, registerWithPasskey } from "./passkey";
+import { errorMessage, isPasskeyAvailable, loginWithPasskey, registerWithPasskey } from "./passkey";
 import { clearSession, createFood, deleteFood, loadSnapshot, saveSession, syncSnapshot } from "./tauri";
 import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 
@@ -91,7 +91,7 @@ export function App() {
         setSnapshot((current) => ({ ...current, session, syncStatus: "online" }));
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Passkey 操作失败。");
+      setMessage(errorMessage(error));
     } finally {
       setBusy(false);
     }
