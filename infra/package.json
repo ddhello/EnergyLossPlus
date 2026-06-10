@@ -6,7 +6,7 @@
     "build": "tsc",
     "synth": "cdk synth",
     "deploy": "cdk deploy",
-    "deploy:ios": "cdk deploy EnergyLossPlusStack --parameters EnergyLossPlusStack:WebauthnOrigin=https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com --parameters EnergyLossPlusStack:WebauthnRpId=3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+    "deploy:ios": "cdk deploy EnergyLossPlusStack --profile energy-profile --parameters EnergyLossPlusStack:WebauthnOrigin=https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com --parameters EnergyLossPlusStack:WebauthnRpId=3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.170.0",

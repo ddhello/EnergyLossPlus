@@ -69,19 +69,20 @@ jobs:
         working-directory: apps/desktop
         run: npx tauri ios init --ci
 
-      - name: Register iOS callback URL scheme
-        run: |
-          PLIST="apps/desktop/src-tauri/gen/apple/energy-loss-plus-desktop_iOS/Info.plist"
-          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.energylossplus.desktop" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string energylossplus" "$PLIST"
-
       - name: Build unsigned IPA
         working-directory: apps/desktop
         run: npx tauri ios build --no-sign
+
+      - name: Verify iOS callback URL scheme
+        run: |
+          IPA="$(find apps/desktop/src-tauri/gen/apple/build -type f -name '*.ipa' -print -quit)"
+          test -n "$IPA"
+          rm -rf /tmp/energylossplus-ipa
+          mkdir -p /tmp/energylossplus-ipa
+          unzip -q "$IPA" -d /tmp/energylossplus-ipa
+          PLIST="$(find /tmp/energylossplus-ipa/Payload -type f -name Info.plist -print -quit)"
+          test -n "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes" "$PLIST" | grep -q "energylossplus"
 
       - name: Collect IPA
         run: |
