@@ -17,8 +17,9 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; touch-action: manipulation; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+html, body, #root { min-height: 100%; scrollbar-width: none; touch-action: manipulation; }
+html::-webkit-scrollbar, body::-webkit-scrollbar, #root::-webkit-scrollbar { display: none; height: 0; width: 0; }
+body { margin: 0; min-width: 320px; min-height: 100vh; -ms-overflow-style: none; }
 button, input { font: inherit; }
 button { border: 0; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.5; }
