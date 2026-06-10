@@ -69,6 +69,16 @@ jobs:
         working-directory: apps/desktop
         run: npx tauri ios init --ci
 
+      - name: Install and verify custom iOS app icon
+        run: |
+          APPICONSET="$(find apps/desktop/src-tauri/gen/apple -type d -name 'AppIcon.appiconset' -print -quit)"
+          test -n "$APPICONSET"
+          cp apps/desktop/src-tauri/icons/ios/*.png "$APPICONSET/"
+          SOURCE_HASH="$(shasum -a 256 apps/desktop/src-tauri/icons/ios/AppIcon-512@2x.png | awk '{print $1}')"
+          INSTALLED_HASH="$(shasum -a 256 "$APPICONSET/AppIcon-512@2x.png" | awk '{print $1}')"
+          test "$SOURCE_HASH" = "$INSTALLED_HASH"
+          echo "Installed custom AppIcon into $APPICONSET"
+
       - name: Build unsigned IPA
         working-directory: apps/desktop
         run: npx tauri ios build --no-sign
