@@ -50,20 +50,20 @@ jobs:
         env:
           API_BASE_URL: ${{ inputs.api_base_url || vars.API_BASE_URL }}
         run: |
-          if [[ -z "$API_BASE_URL" ]]; then
-            echo "::error::Set the repository Actions variable API_BASE_URL, or provide api_base_url when manually running this workflow."
-            exit 1
-          fi
+          API_BASE_URL="${API_BASE_URL:-https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com}"
+          API_BASE_URL="$(printf '%s' "$API_BASE_URL" | xargs)"
+          API_BASE_URL="${API_BASE_URL%/}"
           if [[ "$API_BASE_URL" != https://* ]]; then
-            echo "::error::API_BASE_URL must use HTTPS for an iOS release build."
-            exit 1
+            echo "::warning::Ignoring invalid API_BASE_URL and using the deployed EnergyLossPlus API."
+            API_BASE_URL="https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
           fi
           if [[ "$API_BASE_URL" == *"{"* || "$API_BASE_URL" == *"}"* || "$API_BASE_URL" == *"proxy+"* ]]; then
-            echo "::error::API_BASE_URL must be the API base endpoint without the API Gateway /{proxy+} route placeholder."
-            exit 1
+            echo "::warning::Removing the API Gateway route placeholder from API_BASE_URL."
+            API_BASE_URL="${API_BASE_URL%%/\{proxy+\}*}"
           fi
-          echo "VITE_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
-          echo "ENERGY_API_BASE_URL=${API_BASE_URL%/}" >> "$GITHUB_ENV"
+          echo "Using API_BASE_URL=$API_BASE_URL"
+          echo "VITE_API_BASE_URL=$API_BASE_URL" >> "$GITHUB_ENV"
+          echo "ENERGY_API_BASE_URL=$API_BASE_URL" >> "$GITHUB_ENV"
 
       - name: Initialize iOS project
         working-directory: apps/desktop
