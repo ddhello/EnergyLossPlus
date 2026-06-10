@@ -37,10 +37,7 @@ pub fn load_cached_snapshot(app: AppHandle) -> Result<CachedSnapshot, CommandErr
 #[tauri::command]
 pub async fn sync_snapshot(app: AppHandle, token: String) -> Result<CachedSnapshot, CommandError> {
     let api = ApiClient::from_env();
-    let snapshot = api
-        .snapshot(&token)
-        .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+    let snapshot = api.snapshot(&token).await.map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -77,7 +74,7 @@ pub async fn auth_post(
     ApiClient::from_env()
         .auth_post(&path, &body)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))
+        .map_err(to_network_error)
 }
 
 #[tauri::command]
@@ -89,7 +86,7 @@ pub async fn update_goal(
     let snapshot = ApiClient::from_env()
         .update_goal(&token, &profile)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -105,7 +102,7 @@ pub async fn create_food(
     let snapshot = ApiClient::from_env()
         .create_food(&token, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -122,7 +119,7 @@ pub async fn update_food(
     let snapshot = ApiClient::from_env()
         .update_food(&token, &id, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -138,7 +135,7 @@ pub async fn delete_food(
     let snapshot = ApiClient::from_env()
         .delete_food(&token, &id)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -154,7 +151,7 @@ pub async fn create_exercise(
     let snapshot = ApiClient::from_env()
         .create_exercise(&token, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -171,7 +168,7 @@ pub async fn update_exercise(
     let snapshot = ApiClient::from_env()
         .update_exercise(&token, &id, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -187,7 +184,7 @@ pub async fn delete_exercise(
     let snapshot = ApiClient::from_env()
         .delete_exercise(&token, &id)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -203,7 +200,7 @@ pub async fn create_weight(
     let snapshot = ApiClient::from_env()
         .create_weight(&token, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -220,7 +217,7 @@ pub async fn update_weight(
     let snapshot = ApiClient::from_env()
         .update_weight(&token, &id, &entry)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -236,7 +233,7 @@ pub async fn delete_weight(
     let snapshot = ApiClient::from_env()
         .delete_weight(&token, &id)
         .await
-        .map_err(|error| CommandError::Network(error.to_string()))?;
+        .map_err(to_network_error)?;
     cache(&app)?
         .save_snapshot(&snapshot)
         .map_err(to_cache_error)?;
@@ -254,6 +251,10 @@ fn cache(app: &AppHandle) -> Result<Cache, CommandError> {
 
 fn to_cache_error(error: anyhow::Error) -> CommandError {
     CommandError::Cache(error.to_string())
+}
+
+fn to_network_error(error: anyhow::Error) -> CommandError {
+    CommandError::Network(format!("{error:#}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

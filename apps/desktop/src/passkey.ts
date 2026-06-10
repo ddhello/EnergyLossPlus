@@ -1,7 +1,9 @@
 import type { Session } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:3000").replace(/\/+$/, "");
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL || "https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+).replace(/\/+$/, "");
 const isTauri = "__TAURI_INTERNALS__" in window;
 
 interface ChallengeResponse {

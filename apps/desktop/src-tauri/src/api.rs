@@ -13,7 +13,7 @@ impl ApiClient {
     pub fn from_env() -> Self {
         let base_url = std::env::var("ENERGY_API_BASE_URL").unwrap_or_else(|_| {
             option_env!("ENERGY_API_BASE_URL")
-                .unwrap_or("http://localhost:3000")
+                .unwrap_or("https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com")
                 .to_string()
         });
         Self {
@@ -23,13 +23,14 @@ impl ApiClient {
     }
 
     pub async fn snapshot(&self, token: &str) -> anyhow::Result<CachedSnapshot> {
+        let url = format!("{}/snapshot", self.base_url);
         let response = self
             .client
-            .get(format!("{}/snapshot", self.base_url))
+            .get(&url)
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .send()
             .await
-            .context("failed to contact EnergyLossPlus API")?;
+            .with_context(|| format!("failed to contact EnergyLossPlus API at {url}"))?;
 
         if !response.status().is_success() {
             anyhow::bail!("sync failed with {}", response.status());
@@ -45,13 +46,14 @@ impl ApiClient {
     where
         T: DeserializeOwned,
     {
+        let url = format!("{}{}", self.base_url, path);
         let response = self
             .client
-            .post(format!("{}{}", self.base_url, path))
+            .post(&url)
             .json(body)
             .send()
             .await
-            .context("failed to contact EnergyLossPlus API")?;
+            .with_context(|| format!("failed to contact EnergyLossPlus API at {url}"))?;
         let status = response.status();
         let text = response
             .text()
@@ -165,7 +167,12 @@ impl ApiClient {
             .json(body)
             .send()
             .await
-            .context("failed to contact EnergyLossPlus API")?;
+            .with_context(|| {
+                format!(
+                    "failed to contact EnergyLossPlus API at {}{}",
+                    self.base_url, path
+                )
+            })?;
 
         if !response.status().is_success() {
             anyhow::bail!("API write failed with {}", response.status());
@@ -184,7 +191,12 @@ impl ApiClient {
             .header(AUTHORIZATION, format!("Bearer {token}"))
             .send()
             .await
-            .context("failed to contact EnergyLossPlus API")?;
+            .with_context(|| {
+                format!(
+                    "failed to contact EnergyLossPlus API at {}{}",
+                    self.base_url, path
+                )
+            })?;
 
         if !response.status().is_success() {
             anyhow::bail!("API delete failed with {}", response.status());
