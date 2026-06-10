@@ -14,10 +14,12 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { isExternalAuthAvailable, listenForExternalAuth, startExternalAuth } from "./external-auth";
 import { errorMessage, isPasskeyAvailable, loginWithPasskey, passkeyUnavailableReason, registerWithPasskey } from "./passkey";
-import { clearSession, createFood, deleteFood, loadSnapshot, saveSession, syncSnapshot } from "./tauri";
+import { clearSession, createFood, deleteFood, isBrowserDevelopment, loadSnapshot, saveSession, syncSnapshot } from "./tauri";
 import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 
 type View = "today" | "history";
+type CalorieInputMode = "direct" | "package";
+type EnergyUnit = "kcal" | "kJ";
 
 const initialProfile: ProfileInput = {
   sex: "male",
@@ -44,12 +46,19 @@ export function App() {
   const [deviceName, setDeviceName] = useState("Phone");
   const [meal, setMeal] = useState("午餐");
   const [foodName, setFoodName] = useState("");
-  const [calories, setCalories] = useState(400);
+  const [caloriesInput, setCaloriesInput] = useState("400");
+  const [calorieInputMode, setCalorieInputMode] = useState<CalorieInputMode>("direct");
+  const [energyUnit, setEnergyUnit] = useState<EnergyUnit>("kcal");
+  const [labelEnergyInput, setLabelEnergyInput] = useState("");
+  const [labelGramsInput, setLabelGramsInput] = useState("100");
+  const [packageGramsInput, setPackageGramsInput] = useState("");
   const [dailyTarget, setDailyTarget] = useState(readDailyTarget);
+  const [dailyTargetInput, setDailyTargetInput] = useState(() => String(readDailyTarget()));
   const [selectedDate, setSelectedDate] = useState(todayString);
   const [calendarMonth, setCalendarMonth] = useState(() => todayString().slice(0, 7));
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dockHidden, setDockHidden] = useState(false);
 
   useEffect(() => {
     loadSnapshot()
@@ -57,6 +66,7 @@ export function App() {
         setSnapshot(loaded);
         if (!window.localStorage?.getItem(dailyTargetKey) && loaded.recommendation?.dailyCalorieTarget) {
           setDailyTarget(loaded.recommendation.dailyCalorieTarget);
+          setDailyTargetInput(String(loaded.recommendation.dailyCalorieTarget));
         }
       })
       .catch((error) => console.error(error));
@@ -78,6 +88,35 @@ export function App() {
     return () => unlisten?.();
   }, []);
 
+  useEffect(() => {
+    let lastScrollY = window.scrollY;
+    let ticking = false;
+    const updateDock = () => {
+      const scrollY = Math.max(0, window.scrollY);
+      const delta = scrollY - lastScrollY;
+      if (scrollY < 24) {
+        setDockHidden(false);
+      } else if (delta > 10) {
+        setDockHidden(true);
+      } else if (delta < -10) {
+        setDockHidden(false);
+      }
+      lastScrollY = scrollY;
+      ticking = false;
+    };
+    const handleScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(updateDock);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    setDockHidden(false);
+  }, [view]);
+
   const today = todayString();
   const todayFoods = useMemo(() => foodsForDate(snapshot.foods, today), [snapshot.foods, today]);
   const selectedFoods = useMemo(() => foodsForDate(snapshot.foods, selectedDate), [snapshot.foods, selectedDate]);
@@ -88,6 +127,10 @@ export function App() {
   const consumed = caloriesByDate[today] ?? 0;
   const remaining = dailyTarget - consumed;
   const progress = Math.min(100, Math.round((consumed / Math.max(dailyTarget, 1)) * 100));
+  const mealIndex = Math.max(0, meals.indexOf(meal));
+  const calories = calorieInputMode === "direct"
+    ? positiveNumber(caloriesInput)
+    : calculatePackageCalories(energyUnit, labelEnergyInput, labelGramsInput, packageGramsInput);
   const passkeyAvailable = isPasskeyAvailable();
   const passkeyNotice = passkeyUnavailableReason();
   const externalAuthAvailable = isExternalAuthAvailable();
@@ -138,7 +181,7 @@ export function App() {
   }
 
   async function handleAddMeal() {
-    if (!snapshot.session || !foodName.trim() || calories <= 0) return;
+    if (!snapshot.session || !foodName.trim() || calories === null) return;
     setBusy(true);
     setMessage("");
     try {
@@ -152,7 +195,12 @@ export function App() {
         fatG: 0
       }));
       setFoodName("");
-      setCalories(400);
+      if (calorieInputMode === "direct") {
+        setCaloriesInput("");
+      } else {
+        setLabelEnergyInput("");
+        setPackageGramsInput("");
+      }
     } catch (error) {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "保存失败，云端确认前不会修改记录。");
@@ -177,6 +225,10 @@ export function App() {
 
   async function handleLogout() {
     await clearSession();
+    if (isBrowserDevelopment()) {
+      setSnapshot(await loadSnapshot());
+      return;
+    }
     setSnapshot((current) => ({ ...current, session: undefined, syncStatus: "cached" }));
   }
 
@@ -235,20 +287,50 @@ export function App() {
             </section>
 
             <section className="target-row glass-card">
-              <label><span>每日目标</span><input type="number" min="500" max="6000" step="50" value={dailyTarget} onChange={(event) => setDailyTarget(Number(event.target.value))} /></label>
+              <label><span>每日目标</span><input type="number" min="500" max="6000" step="50" value={dailyTargetInput} onChange={(event) => {
+                const value = event.target.value;
+                setDailyTargetInput(value);
+                const target = positiveNumber(value);
+                if (target !== null) setDailyTarget(target);
+              }} onBlur={() => {
+                if (positiveNumber(dailyTargetInput) === null) setDailyTargetInput(String(dailyTarget));
+              }} /></label>
               <span className="target-unit">kcal</span>
             </section>
 
             <section className="add-card glass-card">
               <div className="section-title"><div><span className="eyebrow">快速添加</span><h2>记一餐</h2></div></div>
-              <div className="segmented">
+              <div className="segmented" style={{ "--segment-index": mealIndex } as React.CSSProperties}>
+                <span className="segment-slider" aria-hidden="true" />
                 {meals.map((item) => <button key={item} className={meal === item ? "active" : ""} onClick={() => setMeal(item)}>{item}</button>)}
               </div>
-              <div className="field-grid">
-                <label>吃了什么<input placeholder="例如：牛肉饭" value={foodName} onChange={(event) => setFoodName(event.target.value)} /></label>
-                <label>热量<input type="number" min="1" step="10" value={calories} onChange={(event) => setCalories(Number(event.target.value))} /></label>
+              <label>吃了什么<input placeholder="例如：牛肉饭" value={foodName} onChange={(event) => setFoodName(event.target.value)} /></label>
+              <div className="input-mode-switch" aria-label="热量输入方式" style={{ "--switch-index": calorieInputMode === "direct" ? 0 : 1 } as React.CSSProperties}>
+                <span className="switch-slider" aria-hidden="true" />
+                <button className={calorieInputMode === "direct" ? "active" : ""} onClick={() => setCalorieInputMode("direct")}>直接热量</button>
+                <button className={calorieInputMode === "package" ? "active" : ""} onClick={() => setCalorieInputMode("package")}>包装换算</button>
               </div>
-              <button className="primary-button add-button" disabled={busy || !foodName.trim() || calories <= 0} onClick={handleAddMeal}><Plus size={18} /> 添加记录</button>
+              {calorieInputMode === "direct" ? (
+                <label className="calorie-input-panel direct" key="direct">热量<input type="number" min="1" step="10" value={caloriesInput} onChange={(event) => setCaloriesInput(event.target.value)} /></label>
+              ) : (
+                <div className="package-calculator calorie-input-panel package" key="package">
+                  <div className="package-fields">
+                    <label>营养表能量<input aria-label="营养表能量" type="number" min="0" step="1" value={labelEnergyInput} onChange={(event) => setLabelEnergyInput(event.target.value)} /></label>
+                    <div className="unit-switch" aria-label="能量单位" style={{ "--switch-index": energyUnit === "kcal" ? 0 : 1 } as React.CSSProperties}>
+                      <span className="switch-slider" aria-hidden="true" />
+                      <button className={energyUnit === "kcal" ? "active" : ""} onClick={() => setEnergyUnit("kcal")}>kcal</button>
+                      <button className={energyUnit === "kJ" ? "active" : ""} onClick={() => setEnergyUnit("kJ")}>kJ</button>
+                    </div>
+                    <label>对应克数<input aria-label="营养表对应克数" type="number" min="0" step="1" value={labelGramsInput} onChange={(event) => setLabelGramsInput(event.target.value)} /></label>
+                    <label>一包克数<input aria-label="一包克数" type="number" min="0" step="1" value={packageGramsInput} onChange={(event) => setPackageGramsInput(event.target.value)} /></label>
+                  </div>
+                  <div className="calculation-result">
+                    <span>整包热量</span>
+                    <strong>{calories ?? "—"} <small>kcal</small></strong>
+                  </div>
+                </div>
+              )}
+              <button className="primary-button add-button" disabled={busy || !foodName.trim() || calories === null} onClick={handleAddMeal}><Plus size={18} /> 添加记录</button>
             </section>
 
             <MealLog title="今日餐单" entries={todayFoods} busy={busy} emptyText="还没有记录，先记下第一餐。" onDelete={handleDeleteMeal} />
@@ -267,7 +349,7 @@ export function App() {
         </div>
 
         {message && <div className="notice">{message}</div>}
-        <nav className="bottom-nav" aria-label="主导航">
+        <nav className={`bottom-nav ${dockHidden ? "hidden" : ""}`} aria-label="主导航">
           <button className={view === "today" ? "active" : ""} onClick={() => setView("today")}><Home size={20} /><span>今天</span></button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}><CalendarDays size={20} /><span>历史</span></button>
         </nav>
@@ -363,6 +445,21 @@ function syncLabel(status: AppSnapshot["syncStatus"]): string {
 function readDailyTarget(): number {
   const saved = Number(window.localStorage?.getItem(dailyTargetKey));
   return Number.isFinite(saved) && saved > 0 ? saved : 2200;
+}
+
+function positiveNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function calculatePackageCalories(unit: EnergyUnit, energyInput: string, basisGramsInput: string, packageGramsInput: string): number | null {
+  const energy = positiveNumber(energyInput);
+  const basisGrams = positiveNumber(basisGramsInput);
+  const packageGrams = positiveNumber(packageGramsInput);
+  if (energy === null || basisGrams === null || packageGrams === null) return null;
+  const kcal = unit === "kJ" ? energy / 4.184 : energy;
+  return Math.round((kcal / basisGrams) * packageGrams);
 }
 
 function todayString(): string {

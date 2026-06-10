@@ -57,6 +57,7 @@ struct AppFinishRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppExchangeRequest {
     code: String,
     state: String,
@@ -903,5 +904,17 @@ mod tests {
         assert!(html.contains("codeChallenge"));
         assert!(html.contains("/auth/app/"));
         assert!(!html.contains("callback?token="));
+    }
+
+    #[test]
+    fn decodes_camel_case_app_exchange_requests() {
+        let request: AppExchangeRequest = serde_json::from_value(serde_json::json!({
+            "code": "code",
+            "state": "state",
+            "codeVerifier": "verifier"
+        }))
+        .unwrap();
+
+        assert_eq!(request.code_verifier, "verifier");
     }
 }

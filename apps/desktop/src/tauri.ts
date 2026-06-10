@@ -2,8 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSnapshot, GoalRecommendation, ProfileInput, Session } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
+const isBrowserDev = import.meta.env.DEV && !isTauri;
+
+export function isBrowserDevelopment(): boolean {
+  return isBrowserDev;
+}
 
 const demoSnapshot: AppSnapshot = {
+  session: {
+    token: "browser-dev-demo",
+    userId: "demo",
+    nickname: "Browser Dev",
+    deviceName: "Vite",
+    expiresAt: "2099-12-31T23:59:59Z"
+  },
   profile: {
     sex: "male",
     ageYears: 34,
@@ -63,7 +75,7 @@ const demoSnapshot: AppSnapshot = {
 
 export async function loadSnapshot(): Promise<AppSnapshot> {
   if (!isTauri) {
-    return demoSnapshot;
+    return isBrowserDev ? demoSnapshot : { ...demoSnapshot, session: undefined };
   }
   return invoke<AppSnapshot>("load_cached_snapshot");
 }
