@@ -47,6 +47,30 @@ struct FinishRequest {
     credential: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppFinishRequest {
+    challenge_id: String,
+    credential: serde_json::Value,
+    state: String,
+    code_challenge: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppExchangeRequest {
+    code: String,
+    state: String,
+    code_verifier: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AppAuthorizationCode {
+    session: Session,
+    state: String,
+    code_challenge: String,
+    expires_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
@@ -95,6 +119,10 @@ pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, 
     let path = event.uri().path();
     match (method, path) {
         ("OPTIONS", _) => empty_response(204),
+        ("GET", "/auth/app") => html_response(200, app_auth_html()),
+        ("POST", "/auth/app/register/finish") => app_register_finish(event, state).await,
+        ("POST", "/auth/app/login/finish") => app_login_finish(event, state).await,
+        ("POST", "/auth/app/exchange") => app_exchange(event, state).await,
         ("POST", "/auth/register/start") => register_start(event, state).await,
         ("POST", "/auth/register/finish") => register_finish(event, state).await,
         ("POST", "/auth/login/start") => login_start(event, state).await,
@@ -118,6 +146,147 @@ pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, 
         }
         _ => json_response(404, &serde_json::json!({ "error": "not found" })),
     }
+}
+
+async fn app_register_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: AppFinishRequest = json_body(&event)?;
+    let Some(record): Option<ChallengeRecord> = state
+        .store
+        .get_json("challenge", &input.challenge_id)
+        .await?
+    else {
+        return json_response(400, &serde_json::json!({ "error": "unknown challenge" }));
+    };
+    let account = match state
+        .passkeys
+        .finish_registration(input.credential, record.clone())
+    {
+        Ok(account) => account,
+        Err(error) => {
+            return json_response(400, &serde_json::json!({ "error": error.to_string() }))
+        }
+    };
+    state
+        .store
+        .put_json(&user_pk(&account.user_id.to_string()), "account", &account)
+        .await?;
+    state
+        .store
+        .put_json(
+            &nickname_pk(&account.nickname),
+            "user",
+            &account.user_id.to_string(),
+        )
+        .await?;
+    state
+        .store
+        .delete("challenge", &record.challenge_id)
+        .await?;
+    issue_app_code(
+        &state,
+        create_session(&account),
+        input.state,
+        input.code_challenge,
+    )
+    .await
+}
+
+async fn app_login_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: AppFinishRequest = json_body(&event)?;
+    let Some(record): Option<ChallengeRecord> = state
+        .store
+        .get_json("challenge", &input.challenge_id)
+        .await?
+    else {
+        return json_response(400, &serde_json::json!({ "error": "unknown challenge" }));
+    };
+    let Some(account): Option<UserAccount> = state
+        .store
+        .get_json(&user_pk(&record.user_id.to_string()), "account")
+        .await?
+    else {
+        return json_response(401, &serde_json::json!({ "error": "unknown passkey user" }));
+    };
+    let account = match state
+        .passkeys
+        .finish_login(input.credential, record.clone(), account)
+    {
+        Ok(account) => account,
+        Err(error) => {
+            return json_response(400, &serde_json::json!({ "error": error.to_string() }))
+        }
+    };
+    state
+        .store
+        .put_json(&user_pk(&account.user_id.to_string()), "account", &account)
+        .await?;
+    state
+        .store
+        .delete("challenge", &record.challenge_id)
+        .await?;
+    issue_app_code(
+        &state,
+        create_session(&account),
+        input.state,
+        input.code_challenge,
+    )
+    .await
+}
+
+async fn issue_app_code(
+    state: &AppState,
+    session: Session,
+    callback_state: String,
+    code_challenge: String,
+) -> Result<Response<Body>, Error> {
+    if callback_state.len() < 16
+        || callback_state.len() > 256
+        || code_challenge.len() < 43
+        || code_challenge.len() > 128
+    {
+        return json_response(400, &serde_json::json!({ "error": "invalid state" }));
+    }
+    let code = uuid::Uuid::new_v4().to_string();
+    let record = AppAuthorizationCode {
+        session,
+        state: callback_state.clone(),
+        code_challenge,
+        expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
+    };
+    state.store.put_json("app-code", &code, &record).await?;
+    json_response(
+        200,
+        &serde_json::json!({
+            "callbackUrl": format!("energylossplus://auth/callback?code={code}&state={callback_state}")
+        }),
+    )
+}
+
+async fn app_exchange(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: AppExchangeRequest = json_body(&event)?;
+    let Some(record): Option<AppAuthorizationCode> =
+        state.store.get_json("app-code", &input.code).await?
+    else {
+        return json_response(
+            400,
+            &serde_json::json!({ "error": "unknown authorization code" }),
+        );
+    };
+    state.store.delete("app-code", &input.code).await?;
+    if record.state != input.state
+        || authorization_code_is_expired(&record)
+        || record.code_challenge != pkce_challenge(&input.code_verifier)
+    {
+        return json_response(
+            400,
+            &serde_json::json!({ "error": "invalid or expired authorization code" }),
+        );
+    }
+    state
+        .store
+        .put_json("token", &record.session.token, &record.session)
+        .await?;
+    json_response(200, &record.session)
 }
 
 async fn register_start(event: Request, state: AppState) -> Result<Response<Body>, Error> {
@@ -588,7 +757,10 @@ where
         .status(status)
         .header("content-type", "application/json")
         .header("access-control-allow-origin", cors_origin())
-        .header("access-control-allow-headers", "Content-Type, Authorization")
+        .header(
+            "access-control-allow-headers",
+            "Content-Type, Authorization",
+        )
         .header(
             "access-control-allow-methods",
             "OPTIONS, GET, POST, PUT, DELETE",
@@ -600,12 +772,22 @@ fn empty_response(status: u16) -> Result<Response<Body>, Error> {
     Ok(Response::builder()
         .status(status)
         .header("access-control-allow-origin", cors_origin())
-        .header("access-control-allow-headers", "Content-Type, Authorization")
+        .header(
+            "access-control-allow-headers",
+            "Content-Type, Authorization",
+        )
         .header(
             "access-control-allow-methods",
             "OPTIONS, GET, POST, PUT, DELETE",
         )
         .body(Body::Empty)?)
+}
+
+fn html_response(status: u16, html: String) -> Result<Response<Body>, Error> {
+    Ok(Response::builder()
+        .status(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(html.into())?)
 }
 
 fn cors_origin() -> String {
@@ -625,6 +807,24 @@ fn session_is_expired(session: &Session) -> bool {
         return true;
     };
     expires_at < chrono::Utc::now()
+}
+
+fn authorization_code_is_expired(code: &AppAuthorizationCode) -> bool {
+    let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&code.expires_at) else {
+        return true;
+    };
+    expires_at < chrono::Utc::now()
+}
+
+fn pkce_challenge(verifier: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+fn app_auth_html() -> String {
+    include_str!("app-auth.html").to_string()
 }
 
 fn path_param<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -667,5 +867,41 @@ mod tests {
         assert!(!session_is_expired(&active));
         assert!(session_is_expired(&expired));
         assert!(session_is_expired(&invalid));
+    }
+
+    #[test]
+    fn treats_expired_authorization_codes_as_expired() {
+        let session = session_with_expiry((Utc::now() + Duration::hours(1)).to_rfc3339());
+        let active = AppAuthorizationCode {
+            session: session.clone(),
+            state: "state".to_string(),
+            code_challenge: "challenge".to_string(),
+            expires_at: (Utc::now() + Duration::minutes(5)).to_rfc3339(),
+        };
+        let expired = AppAuthorizationCode {
+            session,
+            state: "state".to_string(),
+            code_challenge: "challenge".to_string(),
+            expires_at: (Utc::now() - Duration::minutes(5)).to_rfc3339(),
+        };
+
+        assert!(!authorization_code_is_expired(&active));
+        assert!(authorization_code_is_expired(&expired));
+    }
+
+    #[test]
+    fn creates_standard_pkce_challenges() {
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    #[test]
+    fn external_auth_page_uses_codes_instead_of_tokens() {
+        let html = app_auth_html();
+        assert!(html.contains("codeChallenge"));
+        assert!(html.contains("/auth/app/"));
+        assert!(!html.contains("callback?token="));
     }
 }

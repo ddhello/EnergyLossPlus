@@ -69,6 +69,16 @@ jobs:
         working-directory: apps/desktop
         run: npx tauri ios init --ci
 
+      - name: Register iOS callback URL scheme
+        run: |
+          PLIST="apps/desktop/src-tauri/gen/apple/energy-loss-plus-desktop_iOS/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string com.energylossplus.desktop" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string energylossplus" "$PLIST"
+
       - name: Build unsigned IPA
         working-directory: apps/desktop
         run: npx tauri ios build --no-sign

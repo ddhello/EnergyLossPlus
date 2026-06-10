@@ -12,13 +12,13 @@ export class EnergyLossPlusStack extends Stack {
 
     const webauthnRpId = new CfnParameter(this, "WebauthnRpId", {
       type: "String",
-      default: "localhost",
+      default: "3ihs6eswbb.execute-api.us-east-1.amazonaws.com",
       description: "Bare WebAuthn relying-party host, for example app.example.com."
     });
     const webauthnOrigin = new CfnParameter(this, "WebauthnOrigin", {
       type: "String",
-      default: "tauri://localhost",
-      description: "Client origin allowed for Passkey ceremonies. Packaged iOS Tauri apps use tauri://localhost."
+      default: "https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com",
+      description: "HTTPS origin hosting the external browser Passkey page."
     });
     const webauthnRpName = new CfnParameter(this, "WebauthnRpName", {
       type: "String",

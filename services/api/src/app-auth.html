@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EnergyLossPlus 登录</title>
+<style>
+body{background:#e8f0eb;color:#17231c;font:16px system-ui;margin:0;padding:32px 18px}.card{background:#fff;border-radius:24px;box-shadow:0 18px 48px #2344331f;margin:auto;max-width:440px;padding:26px}h1{margin:0 0 8px}p{color:#66766d}label{display:grid;font-weight:700;gap:7px;margin:16px 0}input,button{border-radius:14px;font:inherit;min-height:50px;padding:10px 14px}input{border:1px solid #cad7d0}button{background:#236e50;border:0;color:#fff;font-weight:800;margin-top:10px;width:100%}.secondary{background:#e5eee9;color:#174c39}.notice{background:#fff8dc;border-radius:14px;color:#705d18;margin-top:16px;padding:14px;white-space:pre-wrap}
+</style>
+<main class="card">
+  <h1>EnergyLossPlus</h1>
+  <p>在 Safari 中使用 Passkey，然后返回 App。</p>
+  <label>昵称<input id="nickname" value="new-user"></label>
+  <label>设备名称<input id="device" value="iPhone"></label>
+  <button onclick="authenticate('login')">使用 Passkey 登录</button>
+  <button class="secondary" onclick="authenticate('register')">创建 Passkey</button>
+  <div class="notice" id="notice">等待操作</div>
+</main>
+<script>
+const params=new URLSearchParams(location.search),state=params.get("state"),codeChallenge=params.get("codeChallenge"),notice=document.querySelector("#notice");
+document.querySelector("#nickname").value=params.get("nickname")||"new-user";
+document.querySelector("#device").value=params.get("deviceName")||"iPhone";
+notice.textContent=params.get("mode")==="register"?"请点击“创建 Passkey”继续。":"请点击“使用 Passkey 登录”继续。";
+if(!state||!codeChallenge){notice.textContent="缺少安全参数，请从 App 重新打开此页面。"}
+async function authenticate(mode){
+  try{
+    notice.textContent="正在请求 Passkey…";
+    const nickname=document.querySelector("#nickname").value.trim(),deviceName=document.querySelector("#device").value.trim()||"iPhone";
+    const start=await post(`/auth/${mode}/start`,mode==="register"?{nickname,deviceName}:{nickname});
+    const options=revive(start.publicKey);
+    const credential=mode==="register"?await navigator.credentials.create({publicKey:options}):await navigator.credentials.get({publicKey:options});
+    const finish=await post(`/auth/app/${mode}/finish`,{challengeId:start.challengeId,credential:serialize(credential),state,codeChallenge});
+    notice.textContent="登录成功，正在返回 App…";
+    location.href=finish.callbackUrl;
+  }catch(error){notice.textContent=error?.message||String(error)}
+}
+async function post(path,body){const response=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});if(!response.ok)throw new Error(await response.text());return response.json()}
+function revive(options){const copy=structuredClone(options);copy.challenge=decode(copy.challenge);if(copy.user)copy.user.id=decode(copy.user.id);if(copy.allowCredentials)copy.allowCredentials=copy.allowCredentials.map(x=>({...x,id:decode(x.id)}));return copy}
+function decode(value){const normalized=value.replace(/-/g,"+").replace(/_/g,"/"),binary=atob(normalized.padEnd(Math.ceil(normalized.length/4)*4,"=")),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer}
+function encode(buffer){let binary="";for(const byte of new Uint8Array(buffer))binary+=String.fromCharCode(byte);return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
+function serialize(credential){const response={clientDataJSON:encode(credential.response.clientDataJSON)};if(credential.response.attestationObject)response.attestationObject=encode(credential.response.attestationObject);if(credential.response.authenticatorData){response.authenticatorData=encode(credential.response.authenticatorData);response.signature=encode(credential.response.signature);if(credential.response.userHandle)response.userHandle=encode(credential.response.userHandle)}return{id:credential.id,rawId:encode(credential.rawId),type:credential.type,transports:credential.response.getTransports?.()||[],response}}
+</script>
+</html>

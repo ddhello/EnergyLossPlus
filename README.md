@@ -37,8 +37,6 @@ Configure these environment variables for deployed Passkey origins:
 - `WEBAUTHN_RP_NAME`: display name, defaults to `EnergyLossPlus`.
 - `WEBAUTHN_ORIGIN`: browser origin, for example `https://app.example.com`.
 
-For packaged Tauri desktop builds, the window is configured with `useHttpsScheme` so Windows and Android use an HTTPS localhost-style app origin. Keep the Lambda `WEBAUTHN_ORIGIN` aligned with the actual desktop/web origin used for a release.
-
 After deployment, use the CDK `ApiUrl` output as the client API base:
 
 - `VITE_API_BASE_URL`: used by the React Passkey challenge/finish calls.
@@ -57,15 +55,28 @@ Use only the API base endpoint, such as
 `https://example.execute-api.us-east-1.amazonaws.com`. Do not append the API
 Gateway route placeholder `/{proxy+}`.
 
-Packaged iOS Tauri apps use the `tauri://localhost` origin. Deploy the CDK stack
-with `WebauthnOrigin=tauri://localhost`; otherwise API Gateway CORS blocks the
-Passkey challenge request and iOS reports `Load failed`.
-
 Deploy the iOS API configuration with:
 
 ```powershell
 npm run infra:deploy:ios
 ```
+
+This command requires `cargo-lambda` and valid AWS credentials. Install and
+authenticate once before deploying:
+
+```powershell
+cargo install cargo-lambda
+aws configure
+```
+
+The iOS app now performs Passkey authentication in Safari at `/auth/app`.
+Safari returns to the app through `energylossplus://auth/callback` with a
+five-minute, single-use authorization code. The app exchanges that code for a
+session token; the token is never placed in the callback URL.
+
+The external Safari page uses the API Gateway HTTPS host as its WebAuthn RP.
+After deploying this change, Passkeys created for the old `localhost` RP cannot
+be reused and must be registered again.
 
 ## Authentication boundary
 

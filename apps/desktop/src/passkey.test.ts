@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { errorMessage, loginWithPasskey } from "./passkey";
+import { errorMessage, loginWithPasskey, passkeyUnavailableReason } from "./passkey";
 
 describe("Passkey API errors", () => {
   afterEach(() => {
@@ -24,5 +24,9 @@ describe("Passkey API errors", () => {
     expect(errorMessage(new DOMException("RP ID mismatch", "SecurityError"))).toBe(
       "SecurityError: RP ID mismatch"
     );
+  });
+
+  it("rejects web Passkeys in a Tauri custom-protocol page", () => {
+    expect(passkeyUnavailableReason("tauri:")).toContain("AuthenticationServices");
   });
 });

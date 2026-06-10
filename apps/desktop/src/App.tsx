@@ -12,7 +12,8 @@ import {
   Utensils
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { errorMessage, isPasskeyAvailable, loginWithPasskey, registerWithPasskey } from "./passkey";
+import { isExternalAuthAvailable, listenForExternalAuth, startExternalAuth } from "./external-auth";
+import { errorMessage, isPasskeyAvailable, loginWithPasskey, passkeyUnavailableReason, registerWithPasskey } from "./passkey";
 import { clearSession, createFood, deleteFood, loadSnapshot, saveSession, syncSnapshot } from "./tauri";
 import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 
@@ -65,6 +66,18 @@ export function App() {
     window.localStorage?.setItem(dailyTargetKey, String(dailyTarget));
   }, [dailyTarget]);
 
+  useEffect(() => {
+    if (!isExternalAuthAvailable()) return;
+    let unlisten: (() => void) | undefined;
+    void listenForExternalAuth(
+      (session) => void completeLogin(session),
+      (error) => setMessage(errorMessage(error))
+    ).then((stop) => {
+      unlisten = stop;
+    }).catch((error) => setMessage(errorMessage(error)));
+    return () => unlisten?.();
+  }, []);
+
   const today = todayString();
   const todayFoods = useMemo(() => foodsForDate(snapshot.foods, today), [snapshot.foods, today]);
   const selectedFoods = useMemo(() => foodsForDate(snapshot.foods, selectedDate), [snapshot.foods, selectedDate]);
@@ -75,21 +88,34 @@ export function App() {
   const consumed = caloriesByDate[today] ?? 0;
   const remaining = dailyTarget - consumed;
   const progress = Math.min(100, Math.round((consumed / Math.max(dailyTarget, 1)) * 100));
+  const passkeyAvailable = isPasskeyAvailable();
+  const passkeyNotice = passkeyUnavailableReason();
+  const externalAuthAvailable = isExternalAuthAvailable();
+
+  async function completeLogin(session: import("./types").Session) {
+    await saveSession(session);
+    const synced = await syncSnapshot(session.token).catch(() => null);
+    if (synced) {
+      setSnapshot(synced);
+    } else {
+      setSnapshot((current) => ({ ...current, session, syncStatus: "online" }));
+    }
+    setMessage("");
+  }
 
   async function handleAuth(mode: "register" | "login") {
     setBusy(true);
     setMessage("");
     try {
+      if (externalAuthAvailable) {
+        await startExternalAuth(mode, nickname.trim(), deviceName.trim() || "iPhone");
+        setMessage("已在 Safari 打开登录页，完成 Passkey 后将自动返回 App。");
+        return;
+      }
       const session = mode === "register"
         ? await registerWithPasskey(nickname.trim(), deviceName.trim() || "Phone")
         : await loginWithPasskey(nickname.trim());
-      await saveSession(session);
-      const synced = await syncSnapshot(session.token).catch(() => null);
-      if (synced) {
-        setSnapshot(synced);
-      } else {
-        setSnapshot((current) => ({ ...current, session, syncStatus: "online" }));
-      }
+      await completeLogin(session);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -168,10 +194,10 @@ export function App() {
           </div>
           <label>昵称<input value={nickname} onChange={(event) => setNickname(event.target.value)} /></label>
           <label>设备名称<input value={deviceName} onChange={(event) => setDeviceName(event.target.value)} /></label>
-          {!isPasskeyAvailable() && <div className="notice">当前环境不支持 Passkey。</div>}
+          {passkeyNotice && !externalAuthAvailable && <div className="notice">{passkeyNotice}</div>}
           {message && <div className="notice">{message}</div>}
-          <button className="primary-button" disabled={busy || !nickname.trim()} onClick={() => handleAuth("login")}>登录</button>
-          <button className="secondary-button" disabled={busy || !nickname.trim()} onClick={() => handleAuth("register")}>创建 Passkey</button>
+          <button className="primary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("login")}>登录</button>
+          <button className="secondary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("register")}>创建 Passkey</button>
         </section>
       </main>
     );

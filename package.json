@@ -11,9 +11,10 @@
     "tauri:dev": "npm --workspace apps/desktop run tauri:dev",
     "build": "npm --workspace apps/desktop run build",
     "test": "npm --workspace apps/desktop run test",
+    "api:build": "cargo lambda build --release --arm64 --package energy-api",
     "infra:synth": "npm --workspace infra run synth",
     "infra:deploy": "npm --workspace infra run deploy",
-    "infra:deploy:ios": "npm --workspace infra run deploy:ios",
+    "infra:deploy:ios": "npm run api:build && npm --workspace infra run deploy:ios",
     "rust:test": "cargo test --workspace",
     "rust:check": "cargo check --workspace"
   }

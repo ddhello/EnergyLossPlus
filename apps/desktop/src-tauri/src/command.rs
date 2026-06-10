@@ -59,11 +59,12 @@ pub async fn auth_post(
     path: String,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, CommandError> {
-    const ALLOWED_PATHS: [&str; 4] = [
+    const ALLOWED_PATHS: [&str; 5] = [
         "/auth/register/start",
         "/auth/register/finish",
         "/auth/login/start",
         "/auth/login/finish",
+        "/auth/app/exchange",
     ];
     if !ALLOWED_PATHS.contains(&path.as_str()) {
         return Err(CommandError::Network(

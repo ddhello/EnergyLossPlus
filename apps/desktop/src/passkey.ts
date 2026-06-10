@@ -12,7 +12,17 @@ interface ChallengeResponse {
 }
 
 export function isPasskeyAvailable(): boolean {
-  return Boolean(window.PublicKeyCredential && navigator.credentials);
+  return !passkeyUnavailableReason();
+}
+
+export function passkeyUnavailableReason(protocol = window.location.protocol): string | null {
+  if (protocol === "tauri:") {
+    return "iOS 不允许在 tauri:// 页面中使用网页 Passkey。需要配置真实 HTTPS 域名、Apple Associated Domains，并接入原生 AuthenticationServices。";
+  }
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    return "当前环境不支持 Passkey。";
+  }
+  return null;
 }
 
 export async function registerWithPasskey(nickname: string, deviceName: string): Promise<Session> {
@@ -75,8 +85,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 function ensurePasskeyAvailable(): void {
-  if (!isPasskeyAvailable()) {
-    throw new Error("This runtime does not support Passkey.");
+  const reason = passkeyUnavailableReason();
+  if (reason) {
+    throw new Error(reason);
   }
 }
 
