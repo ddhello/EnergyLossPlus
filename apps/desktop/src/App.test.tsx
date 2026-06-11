@@ -51,6 +51,21 @@ describe("App", () => {
     await waitFor(() => expect(updateDailyTarget).toHaveBeenCalledWith("browser-dev-demo", 2500));
   });
 
+  it("shows an explicit animated status while a network request is pending", async () => {
+    const { container } = render(<App />);
+    const syncSnapshot = vi.spyOn(tauri, "syncSnapshot").mockImplementationOnce(() => new Promise(() => {}));
+
+    await waitFor(() => expect(container.querySelector(".phone-app")).toBeInTheDocument());
+    fireEvent.click(within(container).getByRole("button", { name: "同步" }));
+
+    const status = within(container).getByRole("status");
+    expect(status).toHaveTextContent("正在同步云端数据");
+    expect(status.querySelector(".spinner")).toBeInTheDocument();
+    expect(within(container).getByRole("button", { name: "同步" })).toBeDisabled();
+
+    syncSnapshot.mockRestore();
+  });
+
   it("calculates package calories from a kJ nutrition label", async () => {
     const { container } = render(<App />);
 

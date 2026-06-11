@@ -5,6 +5,7 @@ import {
   Flame,
   Home,
   KeyRound,
+  LoaderCircle,
   LogOut,
   Plus,
   RefreshCw,
@@ -20,6 +21,9 @@ import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 type View = "today" | "history";
 type CalorieInputMode = "direct" | "package";
 type EnergyUnit = "kcal" | "kJ";
+type PendingOperation =
+  | { kind: "loading" | "login" | "register" | "sync" | "target" | "add" | "logout" }
+  | { kind: "delete"; entryId: string };
 
 const initialProfile: ProfileInput = {
   sex: "male",
@@ -57,8 +61,9 @@ export function App() {
   const [selectedDate, setSelectedDate] = useState(todayString);
   const [calendarMonth, setCalendarMonth] = useState(() => todayString().slice(0, 7));
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<PendingOperation | null>({ kind: "loading" });
   const [dockHidden, setDockHidden] = useState(false);
+  const busy = pending !== null;
 
   useEffect(() => {
     loadSnapshot()
@@ -66,7 +71,8 @@ export function App() {
         setSnapshot(loaded);
         applySyncedDailyTarget(loaded);
       })
-      .catch((error) => console.error(error));
+      .catch((error) => setMessage(errorMessage(error)))
+      .finally(() => setPending(null));
   }, []);
 
   useEffect(() => {
@@ -77,7 +83,7 @@ export function App() {
     if (!isExternalAuthAvailable()) return;
     let unlisten: (() => void) | undefined;
     void listenForExternalAuth(
-      (session) => void completeLogin(session),
+      (session) => void handleExternalLogin(session),
       (error) => setMessage(errorMessage(error))
     ).then((stop) => {
       unlisten = stop;
@@ -144,8 +150,19 @@ export function App() {
     setMessage("");
   }
 
+  async function handleExternalLogin(session: import("./types").Session) {
+    setPending({ kind: "login" });
+    try {
+      await completeLogin(session);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setPending(null);
+    }
+  }
+
   async function handleAuth(mode: "register" | "login") {
-    setBusy(true);
+    setPending({ kind: mode });
     setMessage("");
     try {
       if (externalAuthAvailable) {
@@ -160,13 +177,13 @@ export function App() {
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
   async function handleSync() {
     if (!snapshot.session) return;
-    setBusy(true);
+    setPending({ kind: "sync" });
     setMessage("");
     try {
       const synced = await syncSnapshot(snapshot.session.token);
@@ -176,7 +193,7 @@ export function App() {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "同步失败，当前显示本地缓存。");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -187,7 +204,7 @@ export function App() {
       return;
     }
     if (!snapshot.session || target === snapshot.dailyCalorieTarget) return;
-    setBusy(true);
+    setPending({ kind: "target" });
     setMessage("");
     try {
       const synced = await updateDailyTarget(snapshot.session.token, target);
@@ -197,7 +214,7 @@ export function App() {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "每日目标同步失败，当前保留本地设置。");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -211,7 +228,7 @@ export function App() {
 
   async function handleAddMeal() {
     if (!snapshot.session || !foodName.trim() || calories === null) return;
-    setBusy(true);
+    setPending({ kind: "add" });
     setMessage("");
     try {
       setSnapshot(await createFood(snapshot.session.token, {
@@ -234,13 +251,13 @@ export function App() {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "保存失败，云端确认前不会修改记录。");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
   async function handleDeleteMeal(entry: FoodEntry) {
     if (!snapshot.session) return;
-    setBusy(true);
+    setPending({ kind: "delete", entryId: entry.id });
     setMessage("");
     try {
       setSnapshot(await deleteFood(snapshot.session.token, entry.id));
@@ -248,17 +265,38 @@ export function App() {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "删除失败。");
     } finally {
-      setBusy(false);
+      setPending(null);
     }
   }
 
   async function handleLogout() {
-    await clearSession();
-    if (isBrowserDevelopment()) {
-      setSnapshot(await loadSnapshot());
-      return;
+    setPending({ kind: "logout" });
+    try {
+      await clearSession();
+      if (isBrowserDevelopment()) {
+        setSnapshot(await loadSnapshot());
+        return;
+      }
+      setSnapshot((current) => ({ ...current, session: undefined, syncStatus: "cached" }));
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setPending(null);
     }
-    setSnapshot((current) => ({ ...current, session: undefined, syncStatus: "cached" }));
+  }
+
+  if (pending?.kind === "loading") {
+    return (
+      <main className="phone-shell auth-screen">
+        <div className="ambient ambient-one" />
+        <div className="ambient ambient-two" />
+        <section className="initial-loader glass-card" role="status" aria-live="polite">
+          <LoaderCircle className="spinner" size={30} />
+          <strong>正在加载数据</strong>
+          <span>请稍候，正在准备你的记录</span>
+        </section>
+      </main>
+    );
   }
 
   if (!snapshot.session) {
@@ -277,8 +315,15 @@ export function App() {
           <label>设备名称<input value={deviceName} onChange={(event) => setDeviceName(event.target.value)} /></label>
           {passkeyNotice && !externalAuthAvailable && <div className="notice">{passkeyNotice}</div>}
           {message && <div className="notice">{message}</div>}
-          <button className="primary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("login")}>登录</button>
-          <button className="secondary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("register")}>创建 Passkey</button>
+          {pending && <RequestIndicator pending={pending} />}
+          <button className="primary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("login")}>
+            {pending?.kind === "login" && <LoaderCircle className="spinner" size={18} />}
+            {pending?.kind === "login" ? "正在登录..." : "登录"}
+          </button>
+          <button className="secondary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("register")}>
+            {pending?.kind === "register" && <LoaderCircle className="spinner" size={18} />}
+            {pending?.kind === "register" ? "正在创建..." : "创建 Passkey"}
+          </button>
         </section>
       </main>
     );
@@ -289,14 +334,15 @@ export function App() {
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <section className="phone-app">
+        {pending && <RequestIndicator pending={pending} />}
         <header className="mobile-header">
           <div>
             <span className="status-pill"><i />{syncLabel(snapshot.syncStatus)}</span>
             <h1>{view === "today" ? "今天" : "热量日历"}</h1>
           </div>
           <div className="header-actions">
-            <button className="icon-button" aria-label="同步" title="同步" disabled={busy} onClick={handleSync}><RefreshCw size={18} /></button>
-            <button className="icon-button" aria-label="退出" title="退出" onClick={handleLogout}><LogOut size={18} /></button>
+            <button className="icon-button" aria-label="同步" title="同步" disabled={busy} onClick={handleSync}><RefreshCw className={pending?.kind === "sync" ? "spinner" : ""} size={18} /></button>
+            <button className="icon-button" aria-label="退出" title="退出" disabled={busy} onClick={handleLogout}>{pending?.kind === "logout" ? <LoaderCircle className="spinner" size={18} /> : <LogOut size={18} />}</button>
           </div>
         </header>
 
@@ -357,10 +403,13 @@ export function App() {
                   </div>
                 </div>
               )}
-              <button className="primary-button add-button" disabled={busy || !foodName.trim() || calories === null} onClick={handleAddMeal}><Plus size={18} /> 添加记录</button>
+              <button className="primary-button add-button" disabled={busy || !foodName.trim() || calories === null} onClick={handleAddMeal}>
+                {pending?.kind === "add" ? <LoaderCircle className="spinner" size={18} /> : <Plus size={18} />}
+                {pending?.kind === "add" ? "正在添加..." : "添加记录"}
+              </button>
             </section>
 
-            <MealLog title="今日餐单" entries={todayFoods} busy={busy} emptyText="还没有记录，先记下第一餐。" onDelete={handleDeleteMeal} />
+            <MealLog title="今日餐单" entries={todayFoods} busy={busy} deletingId={pending?.kind === "delete" ? pending.entryId : undefined} emptyText="还没有记录，先记下第一餐。" onDelete={handleDeleteMeal} />
           </>
         ) : (
           <>
@@ -370,7 +419,7 @@ export function App() {
               <strong>{caloriesByDate[selectedDate] ?? 0} <small>kcal</small></strong>
               <em>剩余 {dailyTarget - (caloriesByDate[selectedDate] ?? 0)} kcal</em>
             </section>
-            <MealLog title="当日摄入日志" entries={selectedFoods} busy={busy} emptyText="这一天没有摄入记录。" onDelete={handleDeleteMeal} />
+            <MealLog title="当日摄入日志" entries={selectedFoods} busy={busy} deletingId={pending?.kind === "delete" ? pending.entryId : undefined} emptyText="这一天没有摄入记录。" onDelete={handleDeleteMeal} />
           </>
         )}
         </div>
@@ -411,10 +460,21 @@ function Calendar({ month, selectedDate, caloriesByDate, onMonthChange, onSelect
   );
 }
 
-function MealLog({ title, entries, busy, emptyText, onDelete }: {
+function RequestIndicator({ pending }: { pending: PendingOperation }) {
+  return (
+    <div className="request-indicator" role="status" aria-live="polite">
+      <LoaderCircle className="spinner" size={17} />
+      <span>{pendingLabel(pending)}</span>
+      <i aria-hidden="true" />
+    </div>
+  );
+}
+
+function MealLog({ title, entries, busy, deletingId, emptyText, onDelete }: {
   title: string;
   entries: FoodEntry[];
   busy: boolean;
+  deletingId?: string;
   emptyText: string;
   onDelete: (entry: FoodEntry) => void;
 }) {
@@ -428,11 +488,26 @@ function MealLog({ title, entries, busy, emptyText, onDelete }: {
           <div className="meal-icon"><Utensils size={17} /></div>
           <div className="meal-content"><span>{entry.meal}</span><strong>{entry.name}</strong></div>
           <em>{entry.calories} <small>kcal</small></em>
-          <button className="delete-button" title="删除" disabled={busy} onClick={() => onDelete(entry)}><Trash2 size={17} /></button>
+          <button className="delete-button" title="删除" disabled={busy} onClick={() => onDelete(entry)}>
+            {deletingId === entry.id ? <LoaderCircle className="spinner" size={17} /> : <Trash2 size={17} />}
+          </button>
         </article>
       ))}
     </section>
   );
+}
+
+function pendingLabel(pending: PendingOperation): string {
+  switch (pending.kind) {
+    case "login": return "正在登录并同步数据...";
+    case "register": return "正在创建 Passkey...";
+    case "sync": return "正在同步云端数据...";
+    case "target": return "正在保存每日目标...";
+    case "add": return "正在保存饮食记录...";
+    case "delete": return "正在删除饮食记录...";
+    case "logout": return "正在退出登录...";
+    default: return "正在加载数据...";
+  }
 }
 
 function foodsForDate(foods: FoodEntry[], date: string): FoodEntry[] {
