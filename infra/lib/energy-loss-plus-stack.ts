@@ -31,12 +31,6 @@ export class EnergyLossPlusStack extends Stack {
       default: "EnergyLossPlus",
       description: "Display name shown by platform Passkey prompts."
     });
-    const passkeyRecoveryKey = new CfnParameter(this, "PasskeyRecoveryKey", {
-      type: "String",
-      default: "",
-      noEcho: true,
-      description: "Temporary one-time key for recovering an existing account onto a new WebAuthn RP."
-    });
 
     const table = new Table(this, "DataTable", {
       partitionKey: { name: "pk", type: AttributeType.STRING },
@@ -62,7 +56,6 @@ export class EnergyLossPlusStack extends Stack {
         WEBAUTHN_RP_ID: webauthnRpId.valueAsString,
         WEBAUTHN_RP_NAME: webauthnRpName.valueAsString,
         WEBAUTHN_ORIGIN: webauthnOrigin.valueAsString,
-        PASSKEY_RECOVERY_KEY: passkeyRecoveryKey.valueAsString,
         WEB_ORIGINS: webOrigins.join(",")
       }
     });

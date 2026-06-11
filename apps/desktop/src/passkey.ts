@@ -140,6 +140,13 @@ function revivePublicKeyOptions(
     }));
   }
 
+  if (Array.isArray(copy.excludeCredentials)) {
+    copy.excludeCredentials = copy.excludeCredentials.map((credential: Record<string, unknown>) => ({
+      ...credential,
+      id: base64UrlToBuffer(credential.id as string)
+    }));
+  }
+
   return copy as unknown as PublicKeyCredentialCreationOptions | PublicKeyCredentialRequestOptions;
 }
 

@@ -11,10 +11,8 @@ body{background:#e8f0eb;color:#17231c;font:16px system-ui;margin:0;padding:32px 
   <p>在 Safari 中使用 Passkey，然后返回 App。</p>
   <label>昵称<input id="nickname" value="new-user"></label>
   <label>设备名称<input id="device" value="iPhone"></label>
-  <label>恢复密钥<input id="recoveryKey" type="password" autocomplete="one-time-code"></label>
   <button onclick="authenticate('login')">使用 Passkey 登录</button>
   <button class="secondary" onclick="authenticate('register')">创建 Passkey</button>
-  <button class="secondary" onclick="authenticate('recover')">恢复原账号</button>
   <div class="notice" id="notice">等待操作</div>
 </main>
 <script>
@@ -26,17 +24,17 @@ if(!state||!codeChallenge){notice.textContent="缺少安全参数，请从 App �
 async function authenticate(mode){
   try{
     notice.textContent="正在请求 Passkey…";
-    const nickname=document.querySelector("#nickname").value.trim(),deviceName=document.querySelector("#device").value.trim()||"iPhone",recoveryKey=document.querySelector("#recoveryKey").value;
-    const start=await post(`/auth/${mode}/start`,mode==="login"?{nickname}:mode==="recover"?{nickname,deviceName,recoveryKey}:{nickname,deviceName});
+    const nickname=document.querySelector("#nickname").value.trim(),deviceName=document.querySelector("#device").value.trim()||"iPhone";
+    const start=await post(`/auth/${mode}/start`,mode==="register"?{nickname,deviceName}:{nickname});
     const options=revive(start.publicKey);
-    const credential=mode==="login"?await navigator.credentials.get({publicKey:options}):await navigator.credentials.create({publicKey:options});
+    const credential=mode==="register"?await navigator.credentials.create({publicKey:options}):await navigator.credentials.get({publicKey:options});
     const finish=await post(`/auth/app/${mode}/finish`,{challengeId:start.challengeId,credential:serialize(credential),state,codeChallenge,callbackOrigin});
     notice.textContent="登录成功，正在返回 App…";
     location.href=finish.callbackUrl;
   }catch(error){notice.textContent=error?.message||String(error)}
 }
 async function post(path,body){const response=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});if(!response.ok)throw new Error(await response.text());return response.json()}
-function revive(options){const copy=structuredClone(options);copy.challenge=decode(copy.challenge);if(copy.user)copy.user.id=decode(copy.user.id);if(copy.allowCredentials)copy.allowCredentials=copy.allowCredentials.map(x=>({...x,id:decode(x.id)}));return copy}
+function revive(options){const copy=structuredClone(options);copy.challenge=decode(copy.challenge);if(copy.user)copy.user.id=decode(copy.user.id);if(copy.allowCredentials)copy.allowCredentials=copy.allowCredentials.map(x=>({...x,id:decode(x.id)}));if(copy.excludeCredentials)copy.excludeCredentials=copy.excludeCredentials.map(x=>({...x,id:decode(x.id)}));return copy}
 function decode(value){const normalized=value.replace(/-/g,"+").replace(/_/g,"/"),binary=atob(normalized.padEnd(Math.ceil(normalized.length/4)*4,"=")),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer}
 function encode(buffer){let binary="";for(const byte of new Uint8Array(buffer))binary+=String.fromCharCode(byte);return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
 function serialize(credential){const response={clientDataJSON:encode(credential.response.clientDataJSON)};if(credential.response.attestationObject)response.attestationObject=encode(credential.response.attestationObject);if(credential.response.authenticatorData){response.authenticatorData=encode(credential.response.authenticatorData);response.signature=encode(credential.response.signature);if(credential.response.userHandle)response.userHandle=encode(credential.response.userHandle)}return{id:credential.id,rawId:encode(credential.rawId),type:credential.type,transports:credential.response.getTransports?.()||[],response}}

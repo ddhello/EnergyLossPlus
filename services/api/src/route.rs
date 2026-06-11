@@ -42,14 +42,6 @@ struct LoginStartRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RecoverStartRequest {
-    nickname: String,
-    device_name: String,
-    recovery_key: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct FinishRequest {
     challenge_id: String,
     credential: serde_json::Value,
@@ -139,13 +131,10 @@ pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, 
         ("OPTIONS", _) => empty_response(204),
         ("GET", "/auth/app") => html_response(200, app_auth_html()),
         ("POST", "/auth/app/register/finish") => app_register_finish(event, state).await,
-        ("POST", "/auth/app/recover/finish") => app_recover_finish(event, state).await,
         ("POST", "/auth/app/login/finish") => app_login_finish(event, state).await,
         ("POST", "/auth/app/exchange") => app_exchange(event, state).await,
         ("POST", "/auth/register/start") => register_start(event, state).await,
         ("POST", "/auth/register/finish") => register_finish(event, state).await,
-        ("POST", "/auth/recover/start") => recover_start(event, state).await,
-        ("POST", "/auth/recover/finish") => recover_finish(event, state).await,
         ("POST", "/auth/login/start") => login_start(event, state).await,
         ("POST", "/auth/login/finish") => login_finish(event, state).await,
         ("GET", "/snapshot") => snapshot(event, state).await,
@@ -247,19 +236,6 @@ async fn app_login_finish(event: Request, state: AppState) -> Result<Response<Bo
         .store
         .delete("challenge", &record.challenge_id)
         .await?;
-    issue_app_code(
-        &state,
-        create_session(&account),
-        input.state,
-        input.code_challenge,
-        input.callback_origin,
-    )
-    .await
-}
-
-async fn app_recover_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let input: AppFinishRequest = json_body(&event)?;
-    let account = finish_recovery(&state, input.challenge_id, input.credential).await?;
     issue_app_code(
         &state,
         create_session(&account),
@@ -429,83 +405,6 @@ async fn register_finish(event: Request, state: AppState) -> Result<Response<Bod
         .await?;
 
     json_response(200, &session)
-}
-
-async fn recover_start(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let input: RecoverStartRequest = json_body(&event)?;
-    if !recovery_key_is_valid(&input.recovery_key) {
-        return json_response(403, &serde_json::json!({ "error": "invalid recovery key" }));
-    }
-    let Some(user_id): Option<String> = state
-        .store
-        .get_json(&nickname_pk(&input.nickname), "user")
-        .await?
-    else {
-        return json_response(404, &serde_json::json!({ "error": "unknown passkey user" }));
-    };
-    let Some(account): Option<UserAccount> =
-        state.store.get_json(&user_pk(&user_id), "account").await?
-    else {
-        return json_response(404, &serde_json::json!({ "error": "unknown passkey user" }));
-    };
-    let (record, challenge) = state.passkeys.start_recovery(&account, input.device_name)?;
-    state
-        .store
-        .put_json_with_ttl(
-            "challenge",
-            &record.challenge_id,
-            &record,
-            expiration_epoch(&record.expires_at)?,
-        )
-        .await?;
-    json_response(200, &challenge)
-}
-
-async fn recover_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let input: FinishRequest = json_body(&event)?;
-    let account = finish_recovery(&state, input.challenge_id, input.credential).await?;
-    let session = create_session(&account);
-    state
-        .store
-        .put_json_with_ttl(
-            "token",
-            &session.token,
-            &session,
-            expiration_epoch(&session.expires_at)?,
-        )
-        .await?;
-    json_response(200, &session)
-}
-
-async fn finish_recovery(
-    state: &AppState,
-    challenge_id: String,
-    credential: serde_json::Value,
-) -> Result<UserAccount, Error> {
-    let Some(record): Option<ChallengeRecord> =
-        state.store.get_json("challenge", &challenge_id).await?
-    else {
-        return Err("unknown challenge".into());
-    };
-    let Some(account): Option<UserAccount> = state
-        .store
-        .get_json(&user_pk(&record.user_id.to_string()), "account")
-        .await?
-    else {
-        return Err("unknown passkey user".into());
-    };
-    let account = state
-        .passkeys
-        .finish_recovery(credential, record.clone(), account)?;
-    state
-        .store
-        .put_json(&user_pk(&account.user_id.to_string()), "account", &account)
-        .await?;
-    state
-        .store
-        .delete("challenge", &record.challenge_id)
-        .await?;
-    Ok(account)
 }
 
 async fn login_start(event: Request, state: AppState) -> Result<Response<Body>, Error> {
@@ -995,19 +894,6 @@ fn authorization_code_is_expired(code: &AppAuthorizationCode) -> bool {
     expires_at < chrono::Utc::now()
 }
 
-fn recovery_key_is_valid(provided: &str) -> bool {
-    let expected = std::env::var("PASSKEY_RECOVERY_KEY").unwrap_or_default();
-    !expected.is_empty()
-        && expected.len() == provided.len()
-        && expected
-            .bytes()
-            .zip(provided.bytes())
-            .fold(0_u8, |difference, (left, right)| {
-                difference | (left ^ right)
-            })
-            == 0
-}
-
 fn expiration_epoch(expires_at: &str) -> Result<i64, Error> {
     Ok(chrono::DateTime::parse_from_rfc3339(expires_at)?.timestamp())
 }
@@ -1094,19 +980,11 @@ mod tests {
     }
 
     #[test]
-    fn recovery_requires_a_configured_matching_key() {
-        std::env::remove_var("PASSKEY_RECOVERY_KEY");
-        assert!(!recovery_key_is_valid(""));
-        std::env::set_var("PASSKEY_RECOVERY_KEY", "temporary-secret");
-        assert!(recovery_key_is_valid("temporary-secret"));
-        assert!(!recovery_key_is_valid("wrong-secret"));
-    }
-
-    #[test]
     fn external_auth_page_uses_codes_instead_of_tokens() {
         let html = app_auth_html();
         assert!(html.contains("codeChallenge"));
         assert!(html.contains("/auth/app/"));
+        assert!(html.contains("excludeCredentials"));
         assert!(!html.contains("callback?token="));
     }
 

@@ -144,7 +144,7 @@ export function App() {
     setMessage("");
   }
 
-  async function handleAuth(mode: "register" | "login" | "recover") {
+  async function handleAuth(mode: "register" | "login") {
     setBusy(true);
     setMessage("");
     try {
@@ -152,9 +152,6 @@ export function App() {
         await startExternalAuth(mode, nickname.trim(), deviceName.trim() || "iPhone");
         setMessage("已在 Safari 打开登录页，完成 Passkey 后将自动返回 App。");
         return;
-      }
-      if (mode === "recover") {
-        throw new Error("账号恢复必须在外部 HTTPS Passkey 页面中完成。");
       }
       const session = mode === "register"
         ? await registerWithPasskey(nickname.trim(), deviceName.trim() || "Phone")
@@ -282,7 +279,6 @@ export function App() {
           {message && <div className="notice">{message}</div>}
           <button className="primary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("login")}>登录</button>
           <button className="secondary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("register")}>创建 Passkey</button>
-          <button className="secondary-button" disabled={busy || !externalAuthAvailable || !nickname.trim()} onClick={() => handleAuth("recover")}>恢复原账号</button>
         </section>
       </main>
     );

@@ -11,9 +11,9 @@
 
 迁移脚本会复制 DynamoDB 中的全部记录，包括账号、昵称索引、快照、饮食记录和临时认证记录。对于旧版 challenge、token 和 app-code 记录，脚本还会补充缺失的 TTL 属性。
 
-API Gateway 地址包含区域，因此迁移后 WebAuthn RP ID 会改变。旧 Passkey 无法直接登录东京区域的新 API，但可以使用项目内置的“恢复原账号”功能，在保留原 `userId` 和全部数据的情况下注册新 Passkey。
+API Gateway 地址包含区域，因此迁移后 WebAuthn RP ID 会改变，旧 Passkey 无法直接登录东京区域的新 API。本次迁移已完成账号继承并创建新 Passkey，临时账号恢复功能现已从客户端、API 路由和基础设施中移除。
 
-在完成登录、数据同步、写入和账号恢复验证前，不要删除 `us-east-1` 中的旧资源。
+在完成登录、数据同步和写入验证前，不要删除 `us-east-1` 中的旧资源。
 
 ## 1. 检查 AWS Profile
 
@@ -25,17 +25,10 @@ aws configure list-profiles
 aws sts get-caller-identity --profile $env:AWS_PROFILE --region ap-northeast-1
 ```
 
-如果提示找不到 `energy-profile`，需要先重新配置或登录：
+如果 SSO 会话已过期：
 
 ```powershell
-aws configure sso --profile energy-profile
 aws sso login --profile energy-profile
-```
-
-如果该 profile 使用普通访问密钥而不是 SSO：
-
-```powershell
-aws configure --profile energy-profile
 ```
 
 ## 2. 构建并部署东京区域资源
@@ -59,7 +52,7 @@ npx cdk bootstrap "aws://$accountId/ap-northeast-1" --profile $env:AWS_PROFILE
 npm run infra:deploy
 ```
 
-该 Stack 会在 `ap-northeast-1` 创建新的 Lambda、DynamoDB 和 API Gateway，并为 DynamoDB 启用 TTL。
+该 Stack 会在 `ap-northeast-1` 创建 Lambda、DynamoDB 和 API Gateway，并为 DynamoDB 启用 TTL。
 
 ## 3. 获取新 API 地址并配置 WebAuthn
 
@@ -113,51 +106,7 @@ npx cdk deploy EnergyLossPlusStack `
   -AllowNonEmptyDestination
 ```
 
-## 5. 恢复原账号并继承数据
-
-生成临时恢复密钥：
-
-```powershell
-$recoveryKey = [Convert]::ToBase64String(
-  [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-)
-$recoveryKey
-```
-
-将临时恢复密钥部署到东京区域：
-
-```powershell
-npx cdk deploy EnergyLossPlusStack `
-  --region ap-northeast-1 `
-  --profile $env:AWS_PROFILE `
-  --parameters "EnergyLossPlusStack:WebauthnOrigin=$apiUrl" `
-  --parameters "EnergyLossPlusStack:WebauthnRpId=$rpId" `
-  --parameters "EnergyLossPlusStack:PasskeyRecoveryKey=$recoveryKey"
-```
-
-然后进行账号恢复：
-
-1. 打开已指向东京区域 API 的 EnergyLossPlus。
-2. 输入原来的用户名。
-3. 点击“恢复原账号”。
-4. 在外部 Passkey 页面输入 `$recoveryKey`。
-5. 创建新的 Passkey。
-6. 登录后确认原来的每日目标和饮食记录仍然存在。
-
-恢复操作会替换原账号的旧 Passkey，但会保留原 `userId` 和关联快照，因此数据不会丢失。
-
-恢复成功后，立即清空恢复密钥以关闭恢复入口：
-
-```powershell
-npx cdk deploy EnergyLossPlusStack `
-  --region ap-northeast-1 `
-  --profile $env:AWS_PROFILE `
-  --parameters "EnergyLossPlusStack:WebauthnOrigin=$apiUrl" `
-  --parameters "EnergyLossPlusStack:WebauthnRpId=$rpId" `
-  --parameters "EnergyLossPlusStack:PasskeyRecoveryKey="
-```
-
-## 6. 将客户端切换到东京区域
+## 5. 将客户端切换到东京区域
 
 本地构建：
 
@@ -167,17 +116,19 @@ $env:ENERGY_API_BASE_URL = $apiUrl
 npm run build
 ```
 
-同时将 GitHub Actions 仓库变量 `API_BASE_URL` 更新为 `$apiUrl`。
+同时将 Cloudflare Pages 和 GitHub Actions 中的 `API_BASE_URL` 更新为 `$apiUrl`。
 
-## 7. 最终验证清单
+## 6. 最终验证清单
 
 - 新 API 地址包含 `execute-api.ap-northeast-1.amazonaws.com`。
 - 源表和目标表记录数量一致。
-- 使用原用户名完成“恢复原账号”。
+- 使用新 Passkey 可以登录原账号。
 - 登录后可以看到原有每日热量目标和饮食记录。
 - 可以新增和删除记录。
 - 另一台设备同步后可以看到相同数据。
 - DynamoDB TTL 已启用，临时认证记录包含 `expiresAtEpoch`。
-- 已清空 `PasskeyRecoveryKey`。
+- 客户端不再显示账号恢复入口。
+- `/auth/recover/*` API 路由不可访问。
+- Lambda 环境变量中不存在恢复密钥。
 
 全部验证通过后，再考虑停止或删除 `us-east-1` 中的旧资源。

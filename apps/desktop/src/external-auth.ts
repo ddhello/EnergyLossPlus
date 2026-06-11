@@ -15,7 +15,7 @@ export function isExternalAuthAvailable(): boolean {
 }
 
 export async function startExternalAuth(
-  mode: "login" | "register" | "recover",
+  mode: "login" | "register",
   nickname: string,
   deviceName: string
 ): Promise<void> {
