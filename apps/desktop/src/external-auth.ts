@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Session } from "./types";
 
 const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL || "https://api.energylossplus.invalid"
+  import.meta.env.VITE_API_BASE_URL || "https://x38dzo14cd.execute-api.ap-northeast-1.amazonaws.com"
 ).replace(/\/+$/, "");
 const stateKey = "energylossplus.externalAuthState";
 const verifierKey = "energylossplus.externalAuthVerifier";

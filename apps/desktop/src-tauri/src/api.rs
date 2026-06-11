@@ -13,7 +13,7 @@ impl ApiClient {
     pub fn from_env() -> Self {
         let base_url = std::env::var("ENERGY_API_BASE_URL").unwrap_or_else(|_| {
             option_env!("ENERGY_API_BASE_URL")
-                .unwrap_or("https://api.energylossplus.invalid")
+                .unwrap_or("https://x38dzo14cd.execute-api.ap-northeast-1.amazonaws.com")
                 .to_string()
         });
         Self {

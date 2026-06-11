@@ -4,7 +4,7 @@ import type { AppSnapshot, GoalRecommendation, ProfileInput, Session } from "./t
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isBrowserDev = import.meta.env.DEV && !isTauri;
 const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL || "https://api.energylossplus.invalid"
+  import.meta.env.VITE_API_BASE_URL || "https://x38dzo14cd.execute-api.ap-northeast-1.amazonaws.com"
 ).replace(/\/+$/, "");
 const webSessionKey = "energylossplus.webSession";
 

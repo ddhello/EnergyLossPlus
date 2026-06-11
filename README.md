@@ -42,9 +42,8 @@ After deployment, use the CDK `ApiUrl` output as the client API base:
 - `VITE_API_BASE_URL`: used by the React Passkey challenge/finish calls.
 - `ENERGY_API_BASE_URL`: used by the Tauri Rust API client for snapshot and diary writes.
 
-The AWS stack is deployed to `ap-northeast-1`. Client builds must set the API
-environment variables to the deployed stack's `ApiUrl`; there is no production
-fallback endpoint.
+The AWS stack is deployed to `ap-northeast-1`. Client builds default to the
+Tokyo API endpoint and may override it with the API environment variables.
 
 For the unsigned iOS GitHub Actions build, set the repository Actions variable
 `API_BASE_URL` to that HTTPS `ApiUrl`. A manual workflow run can instead provide
