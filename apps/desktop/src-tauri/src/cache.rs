@@ -20,6 +20,8 @@ pub struct CachedSnapshot {
     pub session: Option<Session>,
     pub profile: ProfileInput,
     pub recommendation: Option<GoalRecommendation>,
+    #[serde(default)]
+    pub daily_calorie_target: Option<u16>,
     pub foods: Vec<FoodEntry>,
     pub exercises: Vec<ExerciseEntry>,
     pub weights: Vec<WeightEntry>,
@@ -43,6 +45,7 @@ impl Cache {
             .get_json::<ProfileInput>("profile")?
             .unwrap_or_else(default_profile);
         let recommendation = self.get_json::<GoalRecommendation>("recommendation")?;
+        let daily_calorie_target = self.get_json::<u16>("daily_calorie_target")?;
         let foods = self
             .get_json::<Vec<FoodEntry>>("foods")?
             .unwrap_or_default();
@@ -58,6 +61,7 @@ impl Cache {
             session,
             profile,
             recommendation,
+            daily_calorie_target,
             foods,
             exercises,
             weights,
@@ -68,6 +72,7 @@ impl Cache {
     pub fn save_snapshot(&self, snapshot: &CachedSnapshot) -> anyhow::Result<()> {
         self.set_json("profile", &snapshot.profile)?;
         self.set_json("recommendation", &snapshot.recommendation)?;
+        self.set_json("daily_calorie_target", &snapshot.daily_calorie_target)?;
         self.set_json("foods", &snapshot.foods)?;
         self.set_json("exercises", &snapshot.exercises)?;
         self.set_json("weights", &snapshot.weights)?;

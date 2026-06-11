@@ -42,6 +42,14 @@ struct LoginStartRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RecoverStartRequest {
+    nickname: String,
+    device_name: String,
+    recovery_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FinishRequest {
     challenge_id: String,
     credential: serde_json::Value,
@@ -79,6 +87,8 @@ struct Snapshot {
     session: Option<Session>,
     profile: ProfileInput,
     recommendation: Option<GoalRecommendation>,
+    #[serde(default)]
+    daily_calorie_target: Option<u16>,
     foods: Vec<FoodEntry>,
     exercises: Vec<ExerciseEntry>,
     weights: Vec<WeightEntry>,
@@ -96,6 +106,12 @@ struct CreateFoodRequest {
     carbs_g: f32,
     fat_g: f32,
     note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateDailyTargetRequest {
+    daily_calorie_target: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,14 +139,18 @@ pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, 
         ("OPTIONS", _) => empty_response(204),
         ("GET", "/auth/app") => html_response(200, app_auth_html()),
         ("POST", "/auth/app/register/finish") => app_register_finish(event, state).await,
+        ("POST", "/auth/app/recover/finish") => app_recover_finish(event, state).await,
         ("POST", "/auth/app/login/finish") => app_login_finish(event, state).await,
         ("POST", "/auth/app/exchange") => app_exchange(event, state).await,
         ("POST", "/auth/register/start") => register_start(event, state).await,
         ("POST", "/auth/register/finish") => register_finish(event, state).await,
+        ("POST", "/auth/recover/start") => recover_start(event, state).await,
+        ("POST", "/auth/recover/finish") => recover_finish(event, state).await,
         ("POST", "/auth/login/start") => login_start(event, state).await,
         ("POST", "/auth/login/finish") => login_finish(event, state).await,
         ("GET", "/snapshot") => snapshot(event, state).await,
         ("PUT", "/goal") => update_goal(event, state).await,
+        ("PUT", "/daily-target") => update_daily_target(event, state).await,
         ("POST", "/foods") => create_food(event, state).await,
         ("POST", "/exercises") => create_exercise(event, state).await,
         ("POST", "/weights") => create_weight(event, state).await,
@@ -237,6 +257,19 @@ async fn app_login_finish(event: Request, state: AppState) -> Result<Response<Bo
     .await
 }
 
+async fn app_recover_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: AppFinishRequest = json_body(&event)?;
+    let account = finish_recovery(&state, input.challenge_id, input.credential).await?;
+    issue_app_code(
+        &state,
+        create_session(&account),
+        input.state,
+        input.code_challenge,
+        input.callback_origin,
+    )
+    .await
+}
+
 async fn issue_app_code(
     state: &AppState,
     session: Session,
@@ -258,7 +291,15 @@ async fn issue_app_code(
         code_challenge,
         expires_at: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
     };
-    state.store.put_json("app-code", &code, &record).await?;
+    state
+        .store
+        .put_json_with_ttl(
+            "app-code",
+            &code,
+            &record,
+            expiration_epoch(&record.expires_at)?,
+        )
+        .await?;
     let callback_url = match callback_origin {
         Some(origin) if web_origin_is_allowed(&origin) => {
             format!("{origin}/?code={code}&state={callback_state}")
@@ -295,7 +336,12 @@ async fn app_exchange(event: Request, state: AppState) -> Result<Response<Body>,
     }
     state
         .store
-        .put_json("token", &record.session.token, &record.session)
+        .put_json_with_ttl(
+            "token",
+            &record.session.token,
+            &record.session,
+            expiration_epoch(&record.session.expires_at)?,
+        )
         .await?;
     json_response(200, &record.session)
 }
@@ -326,7 +372,12 @@ async fn register_start(event: Request, state: AppState) -> Result<Response<Body
             .start_registration(input.nickname, input.device_name, &[])?;
     state
         .store
-        .put_json("challenge", &record.challenge_id, &record)
+        .put_json_with_ttl(
+            "challenge",
+            &record.challenge_id,
+            &record,
+            expiration_epoch(&record.expires_at)?,
+        )
         .await?;
     json_response(200, &challenge)
 }
@@ -365,7 +416,12 @@ async fn register_finish(event: Request, state: AppState) -> Result<Response<Bod
         .await?;
     state
         .store
-        .put_json("token", &session.token, &session)
+        .put_json_with_ttl(
+            "token",
+            &session.token,
+            &session,
+            expiration_epoch(&session.expires_at)?,
+        )
         .await?;
     state
         .store
@@ -373,6 +429,83 @@ async fn register_finish(event: Request, state: AppState) -> Result<Response<Bod
         .await?;
 
     json_response(200, &session)
+}
+
+async fn recover_start(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: RecoverStartRequest = json_body(&event)?;
+    if !recovery_key_is_valid(&input.recovery_key) {
+        return json_response(403, &serde_json::json!({ "error": "invalid recovery key" }));
+    }
+    let Some(user_id): Option<String> = state
+        .store
+        .get_json(&nickname_pk(&input.nickname), "user")
+        .await?
+    else {
+        return json_response(404, &serde_json::json!({ "error": "unknown passkey user" }));
+    };
+    let Some(account): Option<UserAccount> =
+        state.store.get_json(&user_pk(&user_id), "account").await?
+    else {
+        return json_response(404, &serde_json::json!({ "error": "unknown passkey user" }));
+    };
+    let (record, challenge) = state.passkeys.start_recovery(&account, input.device_name)?;
+    state
+        .store
+        .put_json_with_ttl(
+            "challenge",
+            &record.challenge_id,
+            &record,
+            expiration_epoch(&record.expires_at)?,
+        )
+        .await?;
+    json_response(200, &challenge)
+}
+
+async fn recover_finish(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let input: FinishRequest = json_body(&event)?;
+    let account = finish_recovery(&state, input.challenge_id, input.credential).await?;
+    let session = create_session(&account);
+    state
+        .store
+        .put_json_with_ttl(
+            "token",
+            &session.token,
+            &session,
+            expiration_epoch(&session.expires_at)?,
+        )
+        .await?;
+    json_response(200, &session)
+}
+
+async fn finish_recovery(
+    state: &AppState,
+    challenge_id: String,
+    credential: serde_json::Value,
+) -> Result<UserAccount, Error> {
+    let Some(record): Option<ChallengeRecord> =
+        state.store.get_json("challenge", &challenge_id).await?
+    else {
+        return Err("unknown challenge".into());
+    };
+    let Some(account): Option<UserAccount> = state
+        .store
+        .get_json(&user_pk(&record.user_id.to_string()), "account")
+        .await?
+    else {
+        return Err("unknown passkey user".into());
+    };
+    let account = state
+        .passkeys
+        .finish_recovery(credential, record.clone(), account)?;
+    state
+        .store
+        .put_json(&user_pk(&account.user_id.to_string()), "account", &account)
+        .await?;
+    state
+        .store
+        .delete("challenge", &record.challenge_id)
+        .await?;
+    Ok(account)
 }
 
 async fn login_start(event: Request, state: AppState) -> Result<Response<Body>, Error> {
@@ -392,7 +525,12 @@ async fn login_start(event: Request, state: AppState) -> Result<Response<Body>, 
     let (record, challenge) = state.passkeys.start_login(&account)?;
     state
         .store
-        .put_json("challenge", &record.challenge_id, &record)
+        .put_json_with_ttl(
+            "challenge",
+            &record.challenge_id,
+            &record,
+            expiration_epoch(&record.expires_at)?,
+        )
         .await?;
     json_response(200, &challenge)
 }
@@ -430,7 +568,12 @@ async fn login_finish(event: Request, state: AppState) -> Result<Response<Body>,
         .await?;
     state
         .store
-        .put_json("token", &session.token, &session)
+        .put_json_with_ttl(
+            "token",
+            &session.token,
+            &session,
+            expiration_epoch(&session.expires_at)?,
+        )
         .await?;
     state
         .store
@@ -462,6 +605,23 @@ async fn update_goal(event: Request, state: AppState) -> Result<Response<Body>, 
     let mut payload = load_snapshot(&state, &session).await?;
     payload.profile = profile;
     payload.recommendation = Some(recommendation);
+    save_snapshot(&state, &session, &payload).await?;
+    json_response(200, &payload)
+}
+
+async fn update_daily_target(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let Some(session) = authenticated_session(&event, &state).await? else {
+        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
+    };
+    let input: UpdateDailyTargetRequest = json_body(&event)?;
+    if !(500..=6000).contains(&input.daily_calorie_target) {
+        return json_response(
+            400,
+            &serde_json::json!({ "error": "dailyCalorieTarget must be between 500 and 6000" }),
+        );
+    }
+    let mut payload = load_snapshot(&state, &session).await?;
+    payload.daily_calorie_target = Some(input.daily_calorie_target);
     save_snapshot(&state, &session, &payload).await?;
     json_response(200, &payload)
 }
@@ -731,6 +891,7 @@ fn default_snapshot(session: &Session) -> Snapshot {
     Snapshot {
         session: Some(session.clone()),
         recommendation: recommend_goal(&profile).ok(),
+        daily_calorie_target: None,
         profile,
         foods: vec![],
         exercises: vec![],
@@ -834,6 +995,23 @@ fn authorization_code_is_expired(code: &AppAuthorizationCode) -> bool {
     expires_at < chrono::Utc::now()
 }
 
+fn recovery_key_is_valid(provided: &str) -> bool {
+    let expected = std::env::var("PASSKEY_RECOVERY_KEY").unwrap_or_default();
+    !expected.is_empty()
+        && expected.len() == provided.len()
+        && expected
+            .bytes()
+            .zip(provided.bytes())
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
+            == 0
+}
+
+fn expiration_epoch(expires_at: &str) -> Result<i64, Error> {
+    Ok(chrono::DateTime::parse_from_rfc3339(expires_at)?.timestamp())
+}
+
 fn pkce_challenge(verifier: &str) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -913,6 +1091,15 @@ mod tests {
             pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
+    }
+
+    #[test]
+    fn recovery_requires_a_configured_matching_key() {
+        std::env::remove_var("PASSKEY_RECOVERY_KEY");
+        assert!(!recovery_key_is_valid(""));
+        std::env::set_var("PASSKEY_RECOVERY_KEY", "temporary-secret");
+        assert!(recovery_key_is_valid("temporary-secret"));
+        assert!(!recovery_key_is_valid("wrong-secret"));
     }
 
     #[test]

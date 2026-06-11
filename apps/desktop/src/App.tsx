@@ -14,7 +14,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { isExternalAuthAvailable, listenForExternalAuth, startExternalAuth } from "./external-auth";
 import { errorMessage, isPasskeyAvailable, loginWithPasskey, passkeyUnavailableReason, registerWithPasskey } from "./passkey";
-import { clearSession, createFood, deleteFood, isBrowserDevelopment, loadSnapshot, saveSession, syncSnapshot } from "./tauri";
+import { clearSession, createFood, deleteFood, isBrowserDevelopment, loadSnapshot, saveSession, syncSnapshot, updateDailyTarget } from "./tauri";
 import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 
 type View = "today" | "history";
@@ -64,10 +64,7 @@ export function App() {
     loadSnapshot()
       .then((loaded) => {
         setSnapshot(loaded);
-        if (!window.localStorage?.getItem(dailyTargetKey) && loaded.recommendation?.dailyCalorieTarget) {
-          setDailyTarget(loaded.recommendation.dailyCalorieTarget);
-          setDailyTargetInput(String(loaded.recommendation.dailyCalorieTarget));
-        }
+        applySyncedDailyTarget(loaded);
       })
       .catch((error) => console.error(error));
   }, []);
@@ -140,13 +137,14 @@ export function App() {
     const synced = await syncSnapshot(session.token).catch(() => null);
     if (synced) {
       setSnapshot(synced);
+      applySyncedDailyTarget(synced);
     } else {
       setSnapshot((current) => ({ ...current, session, syncStatus: "online" }));
     }
     setMessage("");
   }
 
-  async function handleAuth(mode: "register" | "login") {
+  async function handleAuth(mode: "register" | "login" | "recover") {
     setBusy(true);
     setMessage("");
     try {
@@ -154,6 +152,9 @@ export function App() {
         await startExternalAuth(mode, nickname.trim(), deviceName.trim() || "iPhone");
         setMessage("已在 Safari 打开登录页，完成 Passkey 后将自动返回 App。");
         return;
+      }
+      if (mode === "recover") {
+        throw new Error("账号恢复必须在外部 HTTPS Passkey 页面中完成。");
       }
       const session = mode === "register"
         ? await registerWithPasskey(nickname.trim(), deviceName.trim() || "Phone")
@@ -171,13 +172,44 @@ export function App() {
     setBusy(true);
     setMessage("");
     try {
-      setSnapshot(await syncSnapshot(snapshot.session.token));
+      const synced = await syncSnapshot(snapshot.session.token);
+      setSnapshot(synced);
+      applySyncedDailyTarget(synced);
     } catch (error) {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "同步失败，当前显示本地缓存。");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleDailyTargetBlur() {
+    const target = dailyTargetNumber(dailyTargetInput);
+    if (target === null) {
+      setDailyTargetInput(String(dailyTarget));
+      return;
+    }
+    if (!snapshot.session || target === snapshot.dailyCalorieTarget) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const synced = await updateDailyTarget(snapshot.session.token, target);
+      setSnapshot(synced);
+      applySyncedDailyTarget(synced);
+    } catch (error) {
+      setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
+      setMessage(error instanceof Error ? error.message : "每日目标同步失败，当前保留本地设置。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function applySyncedDailyTarget(loaded: AppSnapshot) {
+    const target = loaded.dailyCalorieTarget
+      ?? (window.localStorage?.getItem(dailyTargetKey) ? undefined : loaded.recommendation?.dailyCalorieTarget);
+    if (!target) return;
+    setDailyTarget(target);
+    setDailyTargetInput(String(target));
   }
 
   async function handleAddMeal() {
@@ -250,6 +282,7 @@ export function App() {
           {message && <div className="notice">{message}</div>}
           <button className="primary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("login")}>登录</button>
           <button className="secondary-button" disabled={busy || (!externalAuthAvailable && (!nickname.trim() || !passkeyAvailable))} onClick={() => handleAuth("register")}>创建 Passkey</button>
+          <button className="secondary-button" disabled={busy || !externalAuthAvailable || !nickname.trim()} onClick={() => handleAuth("recover")}>恢复原账号</button>
         </section>
       </main>
     );
@@ -290,11 +323,9 @@ export function App() {
               <label><span>每日目标</span><input type="number" min="500" max="6000" step="50" value={dailyTargetInput} onChange={(event) => {
                 const value = event.target.value;
                 setDailyTargetInput(value);
-                const target = positiveNumber(value);
+                const target = dailyTargetNumber(value);
                 if (target !== null) setDailyTarget(target);
-              }} onBlur={() => {
-                if (positiveNumber(dailyTargetInput) === null) setDailyTargetInput(String(dailyTarget));
-              }} /></label>
+              }} onBlur={handleDailyTargetBlur} /></label>
               <span className="target-unit">kcal</span>
             </section>
 
@@ -451,6 +482,11 @@ function positiveNumber(value: string): number | null {
   if (!value.trim()) return null;
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function dailyTargetNumber(value: string): number | null {
+  const target = positiveNumber(value);
+  return target !== null && target >= 500 && target <= 6000 ? target : null;
 }
 
 function calculatePackageCalories(unit: EnergyUnit, energyInput: string, basisGramsInput: string, packageGramsInput: string): number | null {

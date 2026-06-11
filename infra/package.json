@@ -5,8 +5,8 @@
   "scripts": {
     "build": "tsc",
     "synth": "cdk synth",
-    "deploy": "cdk deploy",
-    "deploy:ios": "cdk deploy EnergyLossPlusStack --profile energy-profile --parameters EnergyLossPlusStack:WebauthnOrigin=https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com --parameters EnergyLossPlusStack:WebauthnRpId=3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+    "deploy": "cdk deploy EnergyLossPlusStack --region ap-northeast-1",
+    "deploy:ios": "cdk deploy EnergyLossPlusStack --region ap-northeast-1"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.170.0",

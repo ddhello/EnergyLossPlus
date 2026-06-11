@@ -59,9 +59,12 @@ pub async fn auth_post(
     path: String,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, CommandError> {
-    const ALLOWED_PATHS: [&str; 5] = [
+    const ALLOWED_PATHS: [&str; 8] = [
         "/auth/register/start",
         "/auth/register/finish",
+        "/auth/recover/start",
+        "/auth/recover/finish",
+        "/auth/app/recover/finish",
         "/auth/login/start",
         "/auth/login/finish",
         "/auth/app/exchange",
@@ -86,6 +89,22 @@ pub async fn update_goal(
 ) -> Result<CachedSnapshot, CommandError> {
     let snapshot = ApiClient::from_env()
         .update_goal(&token, &profile)
+        .await
+        .map_err(to_network_error)?;
+    cache(&app)?
+        .save_snapshot(&snapshot)
+        .map_err(to_cache_error)?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn update_daily_target(
+    app: AppHandle,
+    token: String,
+    daily_calorie_target: u16,
+) -> Result<CachedSnapshot, CommandError> {
+    let snapshot = ApiClient::from_env()
+        .update_daily_target(&token, daily_calorie_target)
         .await
         .map_err(to_network_error)?;
     cache(&app)?

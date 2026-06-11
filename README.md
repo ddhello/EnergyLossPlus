@@ -42,9 +42,9 @@ After deployment, use the CDK `ApiUrl` output as the client API base:
 - `VITE_API_BASE_URL`: used by the React Passkey challenge/finish calls.
 - `ENERGY_API_BASE_URL`: used by the Tauri Rust API client for snapshot and diary writes.
 
-The current development fallback for both clients is
-`https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com`. Environment variables
-still override it when targeting another deployment.
+The AWS stack is deployed to `ap-northeast-1`. Client builds must set the API
+environment variables to the deployed stack's `ApiUrl`; there is no production
+fallback endpoint.
 
 For the unsigned iOS GitHub Actions build, set the repository Actions variable
 `API_BASE_URL` to that HTTPS `ApiUrl`. A manual workflow run can instead provide
@@ -52,8 +52,11 @@ the `api_base_url` input. The workflow injects the value into both client settin
 and fails before building when it is missing.
 
 Use only the API base endpoint, such as
-`https://example.execute-api.us-east-1.amazonaws.com`. Do not append the API
+`https://example.execute-api.ap-northeast-1.amazonaws.com`. Do not append the API
 Gateway route placeholder `/{proxy+}`.
+
+See `REGION_MIGRATION.md` for the `us-east-1` to `ap-northeast-1` DynamoDB
+migration and cutover procedure.
 
 Deploy the iOS API configuration with:
 

@@ -4,7 +4,7 @@ import type { AppSnapshot, GoalRecommendation, ProfileInput, Session } from "./t
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isBrowserDev = import.meta.env.DEV && !isTauri;
 const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL || "https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+  import.meta.env.VITE_API_BASE_URL || "https://api.energylossplus.invalid"
 ).replace(/\/+$/, "");
 const webSessionKey = "energylossplus.webSession";
 
@@ -34,6 +34,7 @@ const demoSnapshot: AppSnapshot = {
     dailyCalorieTarget: 2340,
     macros: { proteinG: 164, carbsG: 321, fatG: 73 }
   },
+  dailyCalorieTarget: 2340,
   foods: [
     {
       id: "demo-food-1",
@@ -126,6 +127,14 @@ export async function updateGoal(token: string, profile: ProfileInput): Promise<
   }
   if (!isTauri) return webApi<AppSnapshot>("/goal", token, "PUT", profile);
   return invoke<AppSnapshot>("update_goal", { token, profile });
+}
+
+export async function updateDailyTarget(token: string, dailyCalorieTarget: number): Promise<AppSnapshot> {
+  if (isBrowserDev) {
+    return { ...demoSnapshot, dailyCalorieTarget, syncStatus: "online" };
+  }
+  if (!isTauri) return webApi<AppSnapshot>("/daily-target", token, "PUT", { dailyCalorieTarget });
+  return invoke<AppSnapshot>("update_daily_target", { token, dailyCalorieTarget });
 }
 
 export async function createFood(token: string, entry: CreateFoodInput): Promise<AppSnapshot> {

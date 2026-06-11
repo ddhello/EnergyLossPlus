@@ -45,6 +45,7 @@ pub struct ChallengeRecord {
 #[serde(rename_all = "camelCase")]
 pub enum ChallengePurpose {
     Register,
+    Recover,
     Login,
 }
 
@@ -110,6 +111,37 @@ impl PasskeyService {
         ))
     }
 
+    pub fn start_recovery(
+        &self,
+        account: &UserAccount,
+        device_name: String,
+    ) -> anyhow::Result<(ChallengeRecord, PublicKeyChallenge)> {
+        let existing = account
+            .passkeys
+            .iter()
+            .map(|passkey| passkey.id.clone())
+            .collect::<Vec<_>>();
+        let (challenge, state) = self.webauthn.start_registration(
+            account.user_id.as_bytes(),
+            &account.nickname,
+            &account.nickname,
+            &existing,
+        );
+        let record = ChallengeRecord {
+            challenge_id: Uuid::new_v4().to_string(),
+            nickname: account.nickname.clone(),
+            device_name: Some(device_name),
+            user_id: account.user_id,
+            purpose: ChallengePurpose::Recover,
+            state: ChallengeState::Register(state),
+            expires_at: expires_in_five_minutes(),
+        };
+        Ok((
+            record.clone(),
+            json_challenge(record.challenge_id, challenge)?,
+        ))
+    }
+
     pub fn finish_registration(
         &self,
         credential: serde_json::Value,
@@ -130,6 +162,27 @@ impl PasskeyService {
             created_at: now.clone(),
             updated_at: now,
         })
+    }
+
+    pub fn finish_recovery(
+        &self,
+        credential: serde_json::Value,
+        record: ChallengeRecord,
+        mut account: UserAccount,
+    ) -> anyhow::Result<UserAccount> {
+        ensure_not_expired(&record)?;
+        if record.purpose != ChallengePurpose::Recover || record.user_id != account.user_id {
+            anyhow::bail!("challenge is not an account recovery ceremony");
+        }
+        let ChallengeState::Register(state) = record.state else {
+            anyhow::bail!("challenge is not a registration ceremony");
+        };
+        let response = registration_response_from_credential(credential)?;
+        let passkey = self.webauthn.finish_registration(&state, &response)?;
+        account.passkeys = vec![passkey];
+        account.device_name = record.device_name.unwrap_or_else(|| "desktop".to_string());
+        account.updated_at = Utc::now().to_rfc3339();
+        Ok(account)
     }
 
     pub fn start_login(
@@ -314,6 +367,19 @@ mod tests {
         assert!(!challenge.challenge_id.is_empty());
         assert!(challenge.public_key.get("challenge").is_some());
         assert!(matches!(record.state, ChallengeState::Register(_)));
+    }
+
+    #[test]
+    fn starts_recovery_for_the_existing_user_id() {
+        let service = PasskeyService::new("localhost", "EnergyLossPlus", "http://localhost:1420");
+        let account = test_account();
+        let (record, _) = service
+            .start_recovery(&account, "new phone".into())
+            .unwrap();
+
+        assert_eq!(record.purpose, ChallengePurpose::Recover);
+        assert_eq!(record.user_id, account.user_id);
+        assert_eq!(record.nickname, account.nickname);
     }
 
     #[test]

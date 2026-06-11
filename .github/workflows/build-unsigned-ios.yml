@@ -50,12 +50,11 @@ jobs:
         env:
           API_BASE_URL: ${{ inputs.api_base_url || vars.API_BASE_URL }}
         run: |
-          API_BASE_URL="${API_BASE_URL:-https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com}"
           API_BASE_URL="$(printf '%s' "$API_BASE_URL" | xargs)"
           API_BASE_URL="${API_BASE_URL%/}"
           if [[ "$API_BASE_URL" != https://* ]]; then
-            echo "::warning::Ignoring invalid API_BASE_URL and using the deployed EnergyLossPlus API."
-            API_BASE_URL="https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+            echo "::error::Set the API_BASE_URL repository variable or workflow input to the ap-northeast-1 API URL."
+            exit 1
           fi
           if [[ "$API_BASE_URL" == *"{"* || "$API_BASE_URL" == *"}"* || "$API_BASE_URL" == *"proxy+"* ]]; then
             echo "::warning::Removing the API Gateway route placeholder from API_BASE_URL."

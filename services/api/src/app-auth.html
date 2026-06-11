@@ -11,8 +11,10 @@ body{background:#e8f0eb;color:#17231c;font:16px system-ui;margin:0;padding:32px 
   <p>在 Safari 中使用 Passkey，然后返回 App。</p>
   <label>昵称<input id="nickname" value="new-user"></label>
   <label>设备名称<input id="device" value="iPhone"></label>
+  <label>恢复密钥<input id="recoveryKey" type="password" autocomplete="one-time-code"></label>
   <button onclick="authenticate('login')">使用 Passkey 登录</button>
   <button class="secondary" onclick="authenticate('register')">创建 Passkey</button>
+  <button class="secondary" onclick="authenticate('recover')">恢复原账号</button>
   <div class="notice" id="notice">等待操作</div>
 </main>
 <script>
@@ -24,10 +26,10 @@ if(!state||!codeChallenge){notice.textContent="缺少安全参数，请从 App �
 async function authenticate(mode){
   try{
     notice.textContent="正在请求 Passkey…";
-    const nickname=document.querySelector("#nickname").value.trim(),deviceName=document.querySelector("#device").value.trim()||"iPhone";
-    const start=await post(`/auth/${mode}/start`,mode==="register"?{nickname,deviceName}:{nickname});
+    const nickname=document.querySelector("#nickname").value.trim(),deviceName=document.querySelector("#device").value.trim()||"iPhone",recoveryKey=document.querySelector("#recoveryKey").value;
+    const start=await post(`/auth/${mode}/start`,mode==="login"?{nickname}:mode==="recover"?{nickname,deviceName,recoveryKey}:{nickname,deviceName});
     const options=revive(start.publicKey);
-    const credential=mode==="register"?await navigator.credentials.create({publicKey:options}):await navigator.credentials.get({publicKey:options});
+    const credential=mode==="login"?await navigator.credentials.get({publicKey:options}):await navigator.credentials.create({publicKey:options});
     const finish=await post(`/auth/app/${mode}/finish`,{challengeId:start.challengeId,credential:serialize(credential),state,codeChallenge,callbackOrigin});
     notice.textContent="登录成功，正在返回 App…";
     location.href=finish.callbackUrl;

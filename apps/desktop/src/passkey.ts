@@ -2,7 +2,7 @@ import type { Session } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL || "https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com"
+  import.meta.env.VITE_API_BASE_URL || "https://api.energylossplus.invalid"
 ).replace(/\/+$/, "");
 const isTauri = "__TAURI_INTERNALS__" in window;
 

@@ -18,12 +18,12 @@ export class EnergyLossPlusStack extends Stack {
 
     const webauthnRpId = new CfnParameter(this, "WebauthnRpId", {
       type: "String",
-      default: "3ihs6eswbb.execute-api.us-east-1.amazonaws.com",
+      default: "localhost",
       description: "Bare WebAuthn relying-party host, for example app.example.com."
     });
     const webauthnOrigin = new CfnParameter(this, "WebauthnOrigin", {
       type: "String",
-      default: "https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com",
+      default: "http://localhost:1420",
       description: "HTTPS origin hosting the external browser Passkey page."
     });
     const webauthnRpName = new CfnParameter(this, "WebauthnRpName", {
@@ -31,11 +31,18 @@ export class EnergyLossPlusStack extends Stack {
       default: "EnergyLossPlus",
       description: "Display name shown by platform Passkey prompts."
     });
+    const passkeyRecoveryKey = new CfnParameter(this, "PasskeyRecoveryKey", {
+      type: "String",
+      default: "",
+      noEcho: true,
+      description: "Temporary one-time key for recovering an existing account onto a new WebAuthn RP."
+    });
 
     const table = new Table(this, "DataTable", {
       partitionKey: { name: "pk", type: AttributeType.STRING },
       sortKey: { name: "sk", type: AttributeType.STRING },
       billingMode: BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: "expiresAtEpoch",
       removalPolicy: RemovalPolicy.RETAIN,
       pointInTimeRecoverySpecification: {
         pointInTimeRecoveryEnabled: true
@@ -55,6 +62,7 @@ export class EnergyLossPlusStack extends Stack {
         WEBAUTHN_RP_ID: webauthnRpId.valueAsString,
         WEBAUTHN_RP_NAME: webauthnRpName.valueAsString,
         WEBAUTHN_ORIGIN: webauthnOrigin.valueAsString,
+        PASSKEY_RECOVERY_KEY: passkeyRecoveryKey.valueAsString,
         WEB_ORIGINS: webOrigins.join(",")
       }
     });
@@ -85,6 +93,10 @@ export class EnergyLossPlusStack extends Stack {
     new CfnOutput(this, "ApiUrl", {
       value: httpApi.apiEndpoint,
       description: "EnergyLossPlus HTTP API base URL."
+    });
+    new CfnOutput(this, "DataTableName", {
+      value: table.tableName,
+      description: "DynamoDB table used by EnergyLossPlus."
     });
   }
 }

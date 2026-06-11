@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import * as tauri from "./tauri";
 
 describe("App", () => {
   it("opens the local dashboard in browser development mode", async () => {
@@ -35,6 +36,19 @@ describe("App", () => {
     expect(calories.value).toBe("");
     expect(dailyTarget.value).toBe("");
     expect(view.getByText("添加记录").closest("button")).toBeDisabled();
+  });
+
+  it("saves a changed daily calorie target", async () => {
+    const { container } = render(<App />);
+    const updateDailyTarget = vi.spyOn(tauri, "updateDailyTarget");
+
+    await waitFor(() => expect(container.querySelector(".target-row")).toBeInTheDocument());
+    const dailyTarget = container.querySelector(".target-row input") as HTMLInputElement;
+
+    fireEvent.change(dailyTarget, { target: { value: "2500" } });
+    fireEvent.blur(dailyTarget);
+
+    await waitFor(() => expect(updateDailyTarget).toHaveBeenCalledWith("browser-dev-demo", 2500));
   });
 
   it("calculates package calories from a kJ nutrition label", async () => {

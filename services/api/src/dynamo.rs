@@ -32,6 +32,33 @@ impl DynamoStore {
         Ok(())
     }
 
+    pub async fn put_json_with_ttl<T>(
+        &self,
+        pk: &str,
+        sk: &str,
+        value: &T,
+        expires_at_epoch: i64,
+    ) -> anyhow::Result<()>
+    where
+        T: Serialize,
+    {
+        let json = serde_json::to_string(value).context("failed to encode item")?;
+        self.client
+            .put_item()
+            .table_name(&self.table_name)
+            .item("pk", AttributeValue::S(pk.to_string()))
+            .item("sk", AttributeValue::S(sk.to_string()))
+            .item("json", AttributeValue::S(json))
+            .item(
+                "expiresAtEpoch",
+                AttributeValue::N(expires_at_epoch.to_string()),
+            )
+            .send()
+            .await
+            .context("failed to put item with ttl")?;
+        Ok(())
+    }
+
     pub async fn get_json<T>(&self, pk: &str, sk: &str) -> anyhow::Result<Option<T>>
     where
         T: DeserializeOwned,

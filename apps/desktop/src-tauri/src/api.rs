@@ -13,7 +13,7 @@ impl ApiClient {
     pub fn from_env() -> Self {
         let base_url = std::env::var("ENERGY_API_BASE_URL").unwrap_or_else(|_| {
             option_env!("ENERGY_API_BASE_URL")
-                .unwrap_or("https://3ihs6eswbb.execute-api.us-east-1.amazonaws.com")
+                .unwrap_or("https://api.energylossplus.invalid")
                 .to_string()
         });
         Self {
@@ -73,6 +73,20 @@ impl ApiClient {
         profile: &ProfileInput,
     ) -> anyhow::Result<CachedSnapshot> {
         self.send_json("PUT", "/goal", token, profile).await
+    }
+
+    pub async fn update_daily_target(
+        &self,
+        token: &str,
+        daily_calorie_target: u16,
+    ) -> anyhow::Result<CachedSnapshot> {
+        self.send_json(
+            "PUT",
+            "/daily-target",
+            token,
+            &serde_json::json!({ "dailyCalorieTarget": daily_calorie_target }),
+        )
+        .await
     }
 
     pub async fn create_food<T>(&self, token: &str, entry: &T) -> anyhow::Result<CachedSnapshot>

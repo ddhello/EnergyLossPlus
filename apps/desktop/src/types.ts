@@ -67,9 +67,9 @@ export interface AppSnapshot {
   session?: Session;
   profile: ProfileInput;
   recommendation?: GoalRecommendation;
+  dailyCalorieTarget?: number;
   foods: FoodEntry[];
   exercises: ExerciseEntry[];
   weights: WeightEntry[];
   syncStatus: "online" | "cached" | "offline";
 }
-
