@@ -57,6 +57,17 @@ Gateway route placeholder `/{proxy+}`.
 See `REGION_MIGRATION.md` for the `us-east-1` to `ap-northeast-1` DynamoDB
 migration and cutover procedure.
 
+Diary data is stored as independent DynamoDB items under each user. The API
+automatically migrates a user's legacy `snapshot` on first access. To migrate
+all users proactively after deploying the new API, run:
+
+```powershell
+cargo run -p energy-api --bin migrate_snapshots_v2 -- --table <DataTableName>
+```
+
+The command is idempotent, reports migrated/skipped/failed users, and leaves
+legacy `snapshot` items in place for rollback.
+
 Deploy the iOS API configuration with:
 
 ```powershell

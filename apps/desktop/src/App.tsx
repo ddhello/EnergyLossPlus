@@ -15,7 +15,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { isExternalAuthAvailable, listenForExternalAuth, startExternalAuth } from "./external-auth";
 import { errorMessage, isPasskeyAvailable, loginWithPasskey, passkeyUnavailableReason, registerWithPasskey } from "./passkey";
-import { clearSession, createFood, deleteFood, isBrowserDevelopment, loadSnapshot, saveSession, syncSnapshot, updateDailyTarget } from "./tauri";
+import { clearSession, createFood, deleteFood, isBrowserDevelopment, loadDiaryMonth, loadSnapshot, saveSession, syncSnapshot, updateDailyTarget } from "./tauri";
 import type { AppSnapshot, FoodEntry, ProfileInput } from "./types";
 
 type View = "today" | "history";
@@ -66,7 +66,7 @@ export function App() {
   const busy = pending !== null;
 
   useEffect(() => {
-    loadSnapshot()
+    loadSnapshot(calendarMonth)
       .then((loaded) => {
         setSnapshot(loaded);
         applySyncedDailyTarget(loaded);
@@ -74,6 +74,19 @@ export function App() {
       .catch((error) => setMessage(errorMessage(error)))
       .finally(() => setPending(null));
   }, []);
+
+  useEffect(() => {
+    if (!snapshot.session) return;
+    let cancelled = false;
+    loadDiaryMonth(snapshot.session.token, calendarMonth)
+      .then((diary) => {
+        if (!cancelled) setSnapshot((current) => ({ ...current, ...diary, syncStatus: "online" }));
+      })
+      .catch(() => {
+        if (!cancelled) setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
+      });
+    return () => { cancelled = true; };
+  }, [calendarMonth, snapshot.session?.token]);
 
   useEffect(() => {
     window.localStorage?.setItem(dailyTargetKey, String(dailyTarget));
@@ -140,7 +153,7 @@ export function App() {
 
   async function completeLogin(session: import("./types").Session) {
     await saveSession(session);
-    const synced = await syncSnapshot(session.token).catch(() => null);
+    const synced = await syncSnapshot(session.token, calendarMonth).catch(() => null);
     if (synced) {
       setSnapshot(synced);
       applySyncedDailyTarget(synced);
@@ -186,7 +199,7 @@ export function App() {
     setPending({ kind: "sync" });
     setMessage("");
     try {
-      const synced = await syncSnapshot(snapshot.session.token);
+      const synced = await syncSnapshot(snapshot.session.token, calendarMonth);
       setSnapshot(synced);
       applySyncedDailyTarget(synced);
     } catch (error) {
@@ -208,8 +221,8 @@ export function App() {
     setMessage("");
     try {
       const synced = await updateDailyTarget(snapshot.session.token, target);
-      setSnapshot(synced);
-      applySyncedDailyTarget(synced);
+      setSnapshot((current) => ({ ...current, ...synced }));
+      applySyncedDailyTarget({ ...snapshot, ...synced });
     } catch (error) {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "每日目标同步失败，当前保留本地设置。");
@@ -231,7 +244,7 @@ export function App() {
     setPending({ kind: "add" });
     setMessage("");
     try {
-      setSnapshot(await createFood(snapshot.session.token, {
+      const created = await createFood(snapshot.session.token, {
         date: today,
         meal,
         name: foodName.trim(),
@@ -239,6 +252,11 @@ export function App() {
         proteinG: 0,
         carbsG: 0,
         fatG: 0
+      });
+      setSnapshot((current) => ({
+        ...current,
+        foods: created.date.startsWith(calendarMonth) ? [...current.foods, created] : current.foods,
+        syncStatus: "online"
       }));
       setFoodName("");
       if (calorieInputMode === "direct") {
@@ -260,7 +278,12 @@ export function App() {
     setPending({ kind: "delete", entryId: entry.id });
     setMessage("");
     try {
-      setSnapshot(await deleteFood(snapshot.session.token, entry.id));
+      await deleteFood(snapshot.session.token, entry.id, entry.date);
+      setSnapshot((current) => ({
+        ...current,
+        foods: current.foods.filter((item) => item.id !== entry.id),
+        syncStatus: "online"
+      }));
     } catch (error) {
       setSnapshot((current) => ({ ...current, syncStatus: "offline" }));
       setMessage(error instanceof Error ? error.message : "删除失败。");
@@ -274,7 +297,7 @@ export function App() {
     try {
       await clearSession();
       if (isBrowserDevelopment()) {
-        setSnapshot(await loadSnapshot());
+        setSnapshot(await loadSnapshot(calendarMonth));
         return;
       }
       setSnapshot((current) => ({ ...current, session: undefined, syncStatus: "cached" }));

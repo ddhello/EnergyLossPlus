@@ -28,6 +28,24 @@ pub struct CachedSnapshot {
     pub sync_status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Bootstrap {
+    pub session: Session,
+    pub profile: ProfileInput,
+    pub recommendation: Option<GoalRecommendation>,
+    pub daily_calorie_target: Option<u16>,
+    pub sync_status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryMonth {
+    pub foods: Vec<FoodEntry>,
+    pub exercises: Vec<ExerciseEntry>,
+    pub weights: Vec<WeightEntry>,
+}
+
 pub struct Cache {
     connection: Connection,
 }
@@ -40,21 +58,13 @@ impl Cache {
         Ok(cache)
     }
 
-    pub fn load_snapshot(&self) -> anyhow::Result<CachedSnapshot> {
+    pub fn load_snapshot(&self, month: &str) -> anyhow::Result<CachedSnapshot> {
         let profile = self
             .get_json::<ProfileInput>("profile")?
             .unwrap_or_else(default_profile);
         let recommendation = self.get_json::<GoalRecommendation>("recommendation")?;
         let daily_calorie_target = self.get_json::<u16>("daily_calorie_target")?;
-        let foods = self
-            .get_json::<Vec<FoodEntry>>("foods")?
-            .unwrap_or_default();
-        let exercises = self
-            .get_json::<Vec<ExerciseEntry>>("exercises")?
-            .unwrap_or_default();
-        let weights = self
-            .get_json::<Vec<WeightEntry>>("weights")?
-            .unwrap_or_default();
+        let diary = self.load_diary_month(month)?;
         let session = self.get_json::<Session>("session")?;
 
         Ok(CachedSnapshot {
@@ -62,23 +72,119 @@ impl Cache {
             profile,
             recommendation,
             daily_calorie_target,
-            foods,
-            exercises,
-            weights,
+            foods: diary.foods,
+            exercises: diary.exercises,
+            weights: diary.weights,
             sync_status: "cached".to_string(),
         })
     }
 
-    pub fn save_snapshot(&self, snapshot: &CachedSnapshot) -> anyhow::Result<()> {
-        self.set_json("profile", &snapshot.profile)?;
-        self.set_json("recommendation", &snapshot.recommendation)?;
-        self.set_json("daily_calorie_target", &snapshot.daily_calorie_target)?;
-        self.set_json("foods", &snapshot.foods)?;
-        self.set_json("exercises", &snapshot.exercises)?;
-        self.set_json("weights", &snapshot.weights)?;
-        if let Some(session) = &snapshot.session {
-            self.save_session(session)?;
+    pub fn save_bootstrap(&self, bootstrap: &Bootstrap) -> anyhow::Result<()> {
+        self.set_json("profile", &bootstrap.profile)?;
+        self.set_json("recommendation", &bootstrap.recommendation)?;
+        self.set_json("daily_calorie_target", &bootstrap.daily_calorie_target)?;
+        self.save_session(&bootstrap.session)
+    }
+
+    pub fn load_diary_month(&self, month: &str) -> anyhow::Result<DiaryMonth> {
+        let prefix = format!("{month}-%");
+        let mut statement = self
+            .connection
+            .prepare("select kind, value from diary where date like ?1 order by date, id")
+            .context("failed to prepare diary query")?;
+        let mut rows = statement
+            .query(params![prefix])
+            .context("failed to query diary")?;
+        let mut diary = DiaryMonth::default();
+        while let Some(row) = rows.next().context("failed to read diary row")? {
+            let kind: String = row.get(0)?;
+            let value: String = row.get(1)?;
+            match kind.as_str() {
+                "food" => diary.foods.push(serde_json::from_str(&value)?),
+                "exercise" => diary.exercises.push(serde_json::from_str(&value)?),
+                "weight" => diary.weights.push(serde_json::from_str(&value)?),
+                _ => {}
+            }
         }
+        Ok(diary)
+    }
+
+    pub fn replace_diary_month(&mut self, month: &str, diary: &DiaryMonth) -> anyhow::Result<()> {
+        let transaction = self
+            .connection
+            .transaction()
+            .context("failed to start diary transaction")?;
+        transaction.execute(
+            "delete from diary where date like ?1",
+            params![format!("{month}-%")],
+        )?;
+        for entry in &diary.foods {
+            upsert_diary(
+                &transaction,
+                "food",
+                &entry.id.to_string(),
+                &entry.date.to_string(),
+                entry,
+            )?;
+        }
+        for entry in &diary.exercises {
+            upsert_diary(
+                &transaction,
+                "exercise",
+                &entry.id.to_string(),
+                &entry.date.to_string(),
+                entry,
+            )?;
+        }
+        for entry in &diary.weights {
+            upsert_diary(
+                &transaction,
+                "weight",
+                &entry.id.to_string(),
+                &entry.date.to_string(),
+                entry,
+            )?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit diary transaction")
+    }
+
+    pub fn upsert_food(&self, entry: &FoodEntry) -> anyhow::Result<()> {
+        upsert_diary(
+            &self.connection,
+            "food",
+            &entry.id.to_string(),
+            &entry.date.to_string(),
+            entry,
+        )
+    }
+
+    pub fn upsert_exercise(&self, entry: &ExerciseEntry) -> anyhow::Result<()> {
+        upsert_diary(
+            &self.connection,
+            "exercise",
+            &entry.id.to_string(),
+            &entry.date.to_string(),
+            entry,
+        )
+    }
+
+    pub fn upsert_weight(&self, entry: &WeightEntry) -> anyhow::Result<()> {
+        upsert_diary(
+            &self.connection,
+            "weight",
+            &entry.id.to_string(),
+            &entry.date.to_string(),
+            entry,
+        )
+    }
+
+    pub fn delete_diary(&self, kind: &str, id: &str) -> anyhow::Result<()> {
+        self.connection.execute(
+            "delete from diary where kind = ?1 and id = ?2",
+            params![kind, id],
+        )?;
         Ok(())
     }
 
@@ -104,6 +210,50 @@ impl Cache {
                 [],
             )
             .context("failed to migrate local cache")?;
+        self.connection
+            .execute(
+                "create table if not exists diary (
+                kind text not null,
+                id text not null,
+                date text not null,
+                value text not null,
+                primary key(kind, id)
+            )",
+                [],
+            )
+            .context("failed to migrate diary cache")?;
+        self.connection
+            .execute("create index if not exists diary_date on diary(date)", [])
+            .context("failed to create diary date index")?;
+        self.migrate_legacy_diary()?;
+        Ok(())
+    }
+
+    fn migrate_legacy_diary(&self) -> anyhow::Result<()> {
+        let count: i64 = self
+            .connection
+            .query_row("select count(*) from diary", [], |row| row.get(0))?;
+        if count != 0 {
+            return Ok(());
+        }
+        for entry in self
+            .get_json::<Vec<FoodEntry>>("foods")?
+            .unwrap_or_default()
+        {
+            self.upsert_food(&entry)?;
+        }
+        for entry in self
+            .get_json::<Vec<ExerciseEntry>>("exercises")?
+            .unwrap_or_default()
+        {
+            self.upsert_exercise(&entry)?;
+        }
+        for entry in self
+            .get_json::<Vec<WeightEntry>>("weights")?
+            .unwrap_or_default()
+        {
+            self.upsert_weight(&entry)?;
+        }
         Ok(())
     }
 
@@ -145,6 +295,25 @@ impl Cache {
     }
 }
 
+fn upsert_diary<T>(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    date: &str,
+    value: &T,
+) -> anyhow::Result<()>
+where
+    T: Serialize,
+{
+    let value = serde_json::to_string(value)?;
+    connection.execute(
+        "insert into diary(kind, id, date, value) values(?1, ?2, ?3, ?4)
+         on conflict(kind, id) do update set date = excluded.date, value = excluded.value",
+        params![kind, id, date, value],
+    )?;
+    Ok(())
+}
+
 fn default_profile() -> ProfileInput {
     ProfileInput {
         sex: energy_core::Sex::Male,
@@ -159,7 +328,9 @@ fn default_profile() -> ProfileInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     #[test]
     fn saves_and_loads_session() {
@@ -174,7 +345,31 @@ mod tests {
         };
 
         cache.save_session(&session).unwrap();
-        let snapshot = cache.load_snapshot().unwrap();
+        let snapshot = cache.load_snapshot("2026-06").unwrap();
         assert_eq!(snapshot.session, Some(session));
+    }
+
+    #[test]
+    fn stores_and_filters_independent_diary_records_by_month() {
+        let dir = tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache.sqlite")).unwrap();
+        let entry = |date: &str| FoodEntry {
+            id: Uuid::new_v4(),
+            user_id: "user".into(),
+            date: NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+            meal: "Lunch".into(),
+            name: "Rice".into(),
+            calories: 500,
+            protein_g: 10.0,
+            carbs_g: 80.0,
+            fat_g: 5.0,
+            note: None,
+        };
+        cache.upsert_food(&entry("2026-06-12")).unwrap();
+        cache.upsert_food(&entry("2026-07-01")).unwrap();
+
+        let june = cache.load_diary_month("2026-06").unwrap();
+        assert_eq!(june.foods.len(), 1);
+        assert_eq!(june.foods[0].date.to_string(), "2026-06-12");
     }
 }

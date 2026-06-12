@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, GoalRecommendation, ProfileInput, Session } from "./types";
+import type { AppBootstrap, AppSnapshot, DiaryMonth, ExerciseEntry, FoodEntry, GoalRecommendation, ProfileInput, Session, WeightEntry } from "./types";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 const isBrowserDev = import.meta.env.DEV && !isTauri;
@@ -78,13 +78,13 @@ const demoSnapshot: AppSnapshot = {
   syncStatus: "cached"
 };
 
-export async function loadSnapshot(): Promise<AppSnapshot> {
-  if (isBrowserDev) return demoSnapshot;
+export async function loadSnapshot(month = today().slice(0, 7)): Promise<AppSnapshot> {
+  if (isBrowserDev) return { ...demoSnapshot, ...diaryForMonth(demoSnapshot, month) };
   if (!isTauri) {
     const session = readWebSession();
-    return session ? webApi<AppSnapshot>("/snapshot", session.token) : { ...demoSnapshot, session: undefined };
+    return session ? loadWebMonth(session.token, month) : { ...demoSnapshot, session: undefined };
   }
-  return invoke<AppSnapshot>("load_cached_snapshot");
+  return invoke<AppSnapshot>("load_cached_snapshot", { month });
 }
 
 export async function calculateGoal(profile: ProfileInput): Promise<GoalRecommendation> {
@@ -94,12 +94,18 @@ export async function calculateGoal(profile: ProfileInput): Promise<GoalRecommen
   return invoke<GoalRecommendation>("calculate_goal", { profile });
 }
 
-export async function syncSnapshot(token: string): Promise<AppSnapshot> {
+export async function syncSnapshot(token: string, month = today().slice(0, 7)): Promise<AppSnapshot> {
   if (isBrowserDev) {
-    return { ...demoSnapshot, syncStatus: "online" };
+    return { ...demoSnapshot, ...diaryForMonth(demoSnapshot, month), syncStatus: "online" };
   }
-  if (!isTauri) return webApi<AppSnapshot>("/snapshot", token);
-  return invoke<AppSnapshot>("sync_snapshot", { token });
+  if (!isTauri) return loadWebMonth(token, month);
+  return invoke<AppSnapshot>("sync_snapshot", { token, month });
+}
+
+export async function loadDiaryMonth(token: string, month: string): Promise<DiaryMonth> {
+  if (isBrowserDev) return diaryForMonth(demoSnapshot, month);
+  if (!isTauri) return webApi<DiaryMonth>(`/v2/diary?month=${month}`, token);
+  return invoke<DiaryMonth>("load_diary_month", { token, month });
 }
 
 export async function saveSession(session: Session): Promise<void> {
@@ -121,116 +127,76 @@ export async function clearSession(): Promise<void> {
   await invoke("clear_session");
 }
 
-export async function updateGoal(token: string, profile: ProfileInput): Promise<AppSnapshot> {
+export async function updateGoal(token: string, profile: ProfileInput): Promise<AppBootstrap> {
   if (isBrowserDev) {
-    return { ...demoSnapshot, profile, syncStatus: "online" };
+    return { ...demoSnapshot, session: demoSnapshot.session!, profile, syncStatus: "online" };
   }
-  if (!isTauri) return webApi<AppSnapshot>("/goal", token, "PUT", profile);
-  return invoke<AppSnapshot>("update_goal", { token, profile });
+  if (!isTauri) return webApi<AppBootstrap>("/v2/goal", token, "PUT", profile);
+  return invoke<AppBootstrap>("update_goal", { token, profile });
 }
 
-export async function updateDailyTarget(token: string, dailyCalorieTarget: number): Promise<AppSnapshot> {
+export async function updateDailyTarget(token: string, dailyCalorieTarget: number): Promise<AppBootstrap> {
   if (isBrowserDev) {
-    return { ...demoSnapshot, dailyCalorieTarget, syncStatus: "online" };
+    return { ...demoSnapshot, session: demoSnapshot.session!, dailyCalorieTarget, syncStatus: "online" };
   }
-  if (!isTauri) return webApi<AppSnapshot>("/daily-target", token, "PUT", { dailyCalorieTarget });
-  return invoke<AppSnapshot>("update_daily_target", { token, dailyCalorieTarget });
+  if (!isTauri) return webApi<AppBootstrap>("/v2/daily-target", token, "PUT", { dailyCalorieTarget });
+  return invoke<AppBootstrap>("update_daily_target", { token, dailyCalorieTarget });
 }
 
-export async function createFood(token: string, entry: CreateFoodInput): Promise<AppSnapshot> {
+export async function createFood(token: string, entry: CreateFoodInput): Promise<FoodEntry> {
   if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      foods: [...demoSnapshot.foods, { ...entry, id: crypto.randomUUID(), userId: "demo" }],
-      syncStatus: "online"
-    };
+    return { ...entry, id: crypto.randomUUID(), userId: "demo" };
   }
-  if (!isTauri) return webApi<AppSnapshot>("/foods", token, "POST", entry);
-  return invoke<AppSnapshot>("create_food", { token, entry });
+  if (!isTauri) return webApi<FoodEntry>("/v2/foods", token, "POST", entry);
+  return invoke<FoodEntry>("create_food", { token, entry });
 }
 
-export async function updateFood(token: string, id: string, entry: CreateFoodInput): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      foods: demoSnapshot.foods.map((item) => item.id === id ? { ...item, ...entry } : item),
-      syncStatus: "online"
-    };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/foods/${id}`, token, "PUT", entry);
-  return invoke<AppSnapshot>("update_food", { token, id, entry });
+export async function updateFood(token: string, id: string, originalDate: string, entry: CreateFoodInput): Promise<FoodEntry> {
+  if (isBrowserDev) return { ...entry, id, userId: "demo" };
+  if (!isTauri) return webApi<FoodEntry>(`/v2/foods/${originalDate}/${id}`, token, "PUT", entry);
+  return invoke<FoodEntry>("update_food", { token, id, originalDate, entry });
 }
 
-export async function deleteFood(token: string, id: string): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return { ...demoSnapshot, foods: demoSnapshot.foods.filter((item) => item.id !== id), syncStatus: "online" };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/foods/${id}`, token, "DELETE");
-  return invoke<AppSnapshot>("delete_food", { token, id });
+export async function deleteFood(token: string, id: string, date: string): Promise<void> {
+  if (isBrowserDev) return;
+  if (!isTauri) return webApi<void>(`/v2/foods/${date}/${id}`, token, "DELETE");
+  return invoke<void>("delete_food", { token, id, date });
 }
 
-export async function createExercise(token: string, entry: CreateExerciseInput): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      exercises: [...demoSnapshot.exercises, { ...entry, id: crypto.randomUUID(), userId: "demo" }],
-      syncStatus: "online"
-    };
-  }
-  if (!isTauri) return webApi<AppSnapshot>("/exercises", token, "POST", entry);
-  return invoke<AppSnapshot>("create_exercise", { token, entry });
+export async function createExercise(token: string, entry: CreateExerciseInput): Promise<ExerciseEntry> {
+  if (isBrowserDev) return { ...entry, id: crypto.randomUUID(), userId: "demo" };
+  if (!isTauri) return webApi<ExerciseEntry>("/v2/exercises", token, "POST", entry);
+  return invoke<ExerciseEntry>("create_exercise", { token, entry });
 }
 
-export async function updateExercise(token: string, id: string, entry: CreateExerciseInput): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      exercises: demoSnapshot.exercises.map((item) => item.id === id ? { ...item, ...entry } : item),
-      syncStatus: "online"
-    };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/exercises/${id}`, token, "PUT", entry);
-  return invoke<AppSnapshot>("update_exercise", { token, id, entry });
+export async function updateExercise(token: string, id: string, originalDate: string, entry: CreateExerciseInput): Promise<ExerciseEntry> {
+  if (isBrowserDev) return { ...entry, id, userId: "demo" };
+  if (!isTauri) return webApi<ExerciseEntry>(`/v2/exercises/${originalDate}/${id}`, token, "PUT", entry);
+  return invoke<ExerciseEntry>("update_exercise", { token, id, originalDate, entry });
 }
 
-export async function deleteExercise(token: string, id: string): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return { ...demoSnapshot, exercises: demoSnapshot.exercises.filter((item) => item.id !== id), syncStatus: "online" };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/exercises/${id}`, token, "DELETE");
-  return invoke<AppSnapshot>("delete_exercise", { token, id });
+export async function deleteExercise(token: string, id: string, date: string): Promise<void> {
+  if (isBrowserDev) return;
+  if (!isTauri) return webApi<void>(`/v2/exercises/${date}/${id}`, token, "DELETE");
+  return invoke<void>("delete_exercise", { token, id, date });
 }
 
-export async function createWeight(token: string, entry: CreateWeightInput): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      weights: [...demoSnapshot.weights, { ...entry, id: crypto.randomUUID(), userId: "demo" }],
-      syncStatus: "online"
-    };
-  }
-  if (!isTauri) return webApi<AppSnapshot>("/weights", token, "POST", entry);
-  return invoke<AppSnapshot>("create_weight", { token, entry });
+export async function createWeight(token: string, entry: CreateWeightInput): Promise<WeightEntry> {
+  if (isBrowserDev) return { ...entry, id: crypto.randomUUID(), userId: "demo" };
+  if (!isTauri) return webApi<WeightEntry>("/v2/weights", token, "POST", entry);
+  return invoke<WeightEntry>("create_weight", { token, entry });
 }
 
-export async function updateWeight(token: string, id: string, entry: CreateWeightInput): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return {
-      ...demoSnapshot,
-      weights: demoSnapshot.weights.map((item) => item.id === id ? { ...item, ...entry } : item),
-      syncStatus: "online"
-    };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/weights/${id}`, token, "PUT", entry);
-  return invoke<AppSnapshot>("update_weight", { token, id, entry });
+export async function updateWeight(token: string, id: string, originalDate: string, entry: CreateWeightInput): Promise<WeightEntry> {
+  if (isBrowserDev) return { ...entry, id, userId: "demo" };
+  if (!isTauri) return webApi<WeightEntry>(`/v2/weights/${originalDate}/${id}`, token, "PUT", entry);
+  return invoke<WeightEntry>("update_weight", { token, id, originalDate, entry });
 }
 
-export async function deleteWeight(token: string, id: string): Promise<AppSnapshot> {
-  if (isBrowserDev) {
-    return { ...demoSnapshot, weights: demoSnapshot.weights.filter((item) => item.id !== id), syncStatus: "online" };
-  }
-  if (!isTauri) return webApi<AppSnapshot>(`/weights/${id}`, token, "DELETE");
-  return invoke<AppSnapshot>("delete_weight", { token, id });
+export async function deleteWeight(token: string, id: string, date: string): Promise<void> {
+  if (isBrowserDev) return;
+  if (!isTauri) return webApi<void>(`/v2/weights/${date}/${id}`, token, "DELETE");
+  return invoke<void>("delete_weight", { token, id, date });
 }
 
 function today(): string {
@@ -245,6 +211,22 @@ function readWebSession(): Session | undefined {
   }
 }
 
+async function loadWebMonth(token: string, month: string): Promise<AppSnapshot> {
+  const [bootstrap, diary] = await Promise.all([
+    webApi<AppBootstrap>("/v2/bootstrap", token),
+    webApi<DiaryMonth>(`/v2/diary?month=${month}`, token)
+  ]);
+  return { ...bootstrap, ...diary };
+}
+
+function diaryForMonth(snapshot: AppSnapshot, month: string): DiaryMonth {
+  return {
+    foods: snapshot.foods.filter((entry) => entry.date.startsWith(month)),
+    exercises: snapshot.exercises.filter((entry) => entry.date.startsWith(month)),
+    weights: snapshot.weights.filter((entry) => entry.date.startsWith(month))
+  };
+}
+
 async function webApi<T>(path: string, token: string, method = "GET", body?: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method,
@@ -255,6 +237,7 @@ async function webApi<T>(path: string, token: string, method = "GET", body?: unk
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   if (!response.ok) throw new Error(await response.text());
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 

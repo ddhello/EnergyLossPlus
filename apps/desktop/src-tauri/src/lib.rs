@@ -11,6 +11,7 @@ pub fn run() {
             command::calculate_goal,
             command::load_cached_snapshot,
             command::sync_snapshot,
+            command::load_diary_month,
             command::save_session,
             command::clear_session,
             command::auth_post,

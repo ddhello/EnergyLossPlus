@@ -9,6 +9,10 @@ use energy_core::{
 use lambda_http::{Body, Error, Request, Response};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, thiserror::Error)]
+#[error("invalid bearer token")]
+struct InvalidBearerToken;
+
 #[derive(Clone)]
 pub struct AppState {
     store: DynamoStore,
@@ -87,6 +91,42 @@ struct Snapshot {
     sync_status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserState {
+    storage_version: u8,
+    profile: ProfileInput,
+    recommendation: Option<GoalRecommendation>,
+    #[serde(default)]
+    daily_calorie_target: Option<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Bootstrap {
+    session: Session,
+    profile: ProfileInput,
+    recommendation: Option<GoalRecommendation>,
+    daily_calorie_target: Option<u16>,
+    sync_status: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiaryMonth {
+    foods: Vec<FoodEntry>,
+    exercises: Vec<ExerciseEntry>,
+    weights: Vec<WeightEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "record", rename_all = "camelCase")]
+enum DiaryRecord {
+    Food(FoodEntry),
+    Exercise(ExerciseEntry),
+    Weight(WeightEntry),
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateFoodRequest {
@@ -127,7 +167,7 @@ struct CreateWeightRequest {
 pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let method = event.method().as_str();
     let path = event.uri().path();
-    match (method, path) {
+    let response = match (method, path) {
         ("OPTIONS", _) => empty_response(204),
         ("GET", "/auth/app") => html_response(200, app_auth_html()),
         ("POST", "/auth/app/register/finish") => app_register_finish(event, state).await,
@@ -155,7 +195,38 @@ pub async fn handler(event: Request, state: AppState) -> Result<Response<Body>, 
         ("DELETE", _) if path_param(path, "/weights/").is_some() => {
             delete_weight(event, state).await
         }
+        ("GET", "/v2/bootstrap") => bootstrap(event, state).await,
+        ("GET", "/v2/diary") => diary_month(event, state).await,
+        ("PUT", "/v2/goal") => update_goal_v2(event, state).await,
+        ("PUT", "/v2/daily-target") => update_daily_target_v2(event, state).await,
+        ("POST", "/v2/foods") => create_food_v2(event, state).await,
+        ("POST", "/v2/exercises") => create_exercise_v2(event, state).await,
+        ("POST", "/v2/weights") => create_weight_v2(event, state).await,
+        ("PUT", _) if dated_path_params(path, "/v2/foods/").is_some() => {
+            update_food_v2(event, state).await
+        }
+        ("DELETE", _) if dated_path_params(path, "/v2/foods/").is_some() => {
+            delete_food_v2(event, state).await
+        }
+        ("PUT", _) if dated_path_params(path, "/v2/exercises/").is_some() => {
+            update_exercise_v2(event, state).await
+        }
+        ("DELETE", _) if dated_path_params(path, "/v2/exercises/").is_some() => {
+            delete_exercise_v2(event, state).await
+        }
+        ("PUT", _) if dated_path_params(path, "/v2/weights/").is_some() => {
+            update_weight_v2(event, state).await
+        }
+        ("DELETE", _) if dated_path_params(path, "/v2/weights/").is_some() => {
+            delete_weight_v2(event, state).await
+        }
         _ => json_response(404, &serde_json::json!({ "error": "not found" })),
+    };
+    match response {
+        Err(error) if error.downcast_ref::<InvalidBearerToken>().is_some() => {
+            json_response(401, &serde_json::json!({ "error": "invalid bearer token" }))
+        }
+        other => other,
     }
 }
 
@@ -483,17 +554,12 @@ async fn login_finish(event: Request, state: AppState) -> Result<Response<Body>,
 }
 
 async fn snapshot(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let payload = load_snapshot(&state, &session).await?;
-    json_response(200, &payload)
+    let session = require_session(&event, &state).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn update_goal(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
+    let session = require_session(&event, &state).await?;
     let profile: ProfileInput = json_body(&event)?;
     let recommendation = match recommend_goal(&profile) {
         Ok(recommendation) => recommendation,
@@ -501,106 +567,62 @@ async fn update_goal(event: Request, state: AppState) -> Result<Response<Body>, 
             return json_response(400, &serde_json::json!({ "error": error.to_string() }))
         }
     };
-    let mut payload = load_snapshot(&state, &session).await?;
-    payload.profile = profile;
-    payload.recommendation = Some(recommendation);
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    let mut user_state = ensure_user_v2(&state, &session).await?;
+    user_state.profile = profile;
+    user_state.recommendation = Some(recommendation);
+    save_user_state(&state, &session, &user_state).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn update_daily_target(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
+    let session = require_session(&event, &state).await?;
     let input: UpdateDailyTargetRequest = json_body(&event)?;
-    if !(500..=6000).contains(&input.daily_calorie_target) {
+    if !valid_daily_target(input.daily_calorie_target) {
         return json_response(
             400,
             &serde_json::json!({ "error": "dailyCalorieTarget must be between 500 and 6000" }),
         );
     }
-    let mut payload = load_snapshot(&state, &session).await?;
-    payload.daily_calorie_target = Some(input.daily_calorie_target);
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    let mut user_state = ensure_user_v2(&state, &session).await?;
+    user_state.daily_calorie_target = Some(input.daily_calorie_target);
+    save_user_state(&state, &session, &user_state).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn create_food(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let input: CreateFoodRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    payload.foods.push(FoodEntry {
-        id: uuid::Uuid::new_v4(),
-        user_id: session.user_id.clone(),
-        date: input.date,
-        meal: input.meal,
-        name: input.name,
-        calories: input.calories,
-        protein_g: input.protein_g,
-        carbs_g: input.carbs_g,
-        fat_g: input.fat_g,
-        note: input.note,
-    });
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(201, &payload)
+    create_food_v2(event.clone(), state.clone()).await?;
+    let session = require_session(&event, &state).await?;
+    json_response(201, &load_snapshot(&state, &session).await?)
 }
 
 async fn create_exercise(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let input: CreateExerciseRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    payload.exercises.push(ExerciseEntry {
-        id: uuid::Uuid::new_v4(),
-        user_id: session.user_id.clone(),
-        date: input.date,
-        name: input.name,
-        calories_burned: input.calories_burned,
-        duration_minutes: input.duration_minutes,
-        note: input.note,
-    });
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(201, &payload)
+    create_exercise_v2(event.clone(), state.clone()).await?;
+    let session = require_session(&event, &state).await?;
+    json_response(201, &load_snapshot(&state, &session).await?)
 }
 
 async fn create_weight(event: Request, state: AppState) -> Result<Response<Body>, Error> {
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let input: CreateWeightRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    payload.weights.push(WeightEntry {
-        id: uuid::Uuid::new_v4(),
-        user_id: session.user_id.clone(),
-        date: input.date,
-        weight_kg: input.weight_kg,
-        note: input.note,
-    });
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(201, &payload)
+    create_weight_v2(event.clone(), state.clone()).await?;
+    let session = require_session(&event, &state).await?;
+    json_response(201, &load_snapshot(&state, &session).await?)
 }
 
 async fn update_food(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/foods/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
+    let session = require_session(&event, &state).await?;
     let input: CreateFoodRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    let Some(entry) = payload
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(old) = snapshot
         .foods
-        .iter_mut()
+        .iter()
         .find(|entry| entry.id.to_string() == id)
     else {
         return json_response(404, &serde_json::json!({ "error": "food entry not found" }));
     };
-    *entry = FoodEntry {
-        id: entry.id,
+    let entry = FoodEntry {
+        id: old.id,
         user_id: session.user_id.clone(),
         date: input.date,
         meal: input.meal,
@@ -611,39 +633,37 @@ async fn update_food(event: Request, state: AppState) -> Result<Response<Body>, 
         fat_g: input.fat_g,
         note: input.note,
     };
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    move_record(&state, &session, old.date, &DiaryRecord::Food(entry)).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn delete_food(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/foods/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let mut payload = load_snapshot(&state, &session).await?;
-    let before = payload.foods.len();
-    payload.foods.retain(|entry| entry.id.to_string() != id);
-    if payload.foods.len() == before {
+    let session = require_session(&event, &state).await?;
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(entry) = snapshot
+        .foods
+        .iter()
+        .find(|entry| entry.id.to_string() == id)
+    else {
         return json_response(404, &serde_json::json!({ "error": "food entry not found" }));
-    }
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    };
+    delete_record(&state, &session, entry.date, "food", id).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn update_exercise(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/exercises/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
+    let session = require_session(&event, &state).await?;
     let input: CreateExerciseRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    let Some(entry) = payload
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(old) = snapshot
         .exercises
-        .iter_mut()
+        .iter()
         .find(|entry| entry.id.to_string() == id)
     else {
         return json_response(
@@ -651,8 +671,8 @@ async fn update_exercise(event: Request, state: AppState) -> Result<Response<Bod
             &serde_json::json!({ "error": "exercise entry not found" }),
         );
     };
-    *entry = ExerciseEntry {
-        id: entry.id,
+    let entry = ExerciseEntry {
+        id: old.id,
         user_id: session.user_id.clone(),
         date: input.date,
         name: input.name,
@@ -660,42 +680,40 @@ async fn update_exercise(event: Request, state: AppState) -> Result<Response<Bod
         duration_minutes: input.duration_minutes,
         note: input.note,
     };
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    move_record(&state, &session, old.date, &DiaryRecord::Exercise(entry)).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn delete_exercise(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/exercises/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
-    let mut payload = load_snapshot(&state, &session).await?;
-    let before = payload.exercises.len();
-    payload.exercises.retain(|entry| entry.id.to_string() != id);
-    if payload.exercises.len() == before {
+    let session = require_session(&event, &state).await?;
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(entry) = snapshot
+        .exercises
+        .iter()
+        .find(|entry| entry.id.to_string() == id)
+    else {
         return json_response(
             404,
             &serde_json::json!({ "error": "exercise entry not found" }),
         );
-    }
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    };
+    delete_record(&state, &session, entry.date, "exercise", id).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn update_weight(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/weights/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
-    };
+    let session = require_session(&event, &state).await?;
     let input: CreateWeightRequest = json_body(&event)?;
-    let mut payload = load_snapshot(&state, &session).await?;
-    let Some(entry) = payload
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(old) = snapshot
         .weights
-        .iter_mut()
+        .iter()
         .find(|entry| entry.id.to_string() == id)
     else {
         return json_response(
@@ -703,35 +721,269 @@ async fn update_weight(event: Request, state: AppState) -> Result<Response<Body>
             &serde_json::json!({ "error": "weight entry not found" }),
         );
     };
-    *entry = WeightEntry {
-        id: entry.id,
+    let entry = WeightEntry {
+        id: old.id,
         user_id: session.user_id.clone(),
         date: input.date,
         weight_kg: input.weight_kg,
         note: input.note,
     };
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    move_record(&state, &session, old.date, &DiaryRecord::Weight(entry)).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
 }
 
 async fn delete_weight(event: Request, state: AppState) -> Result<Response<Body>, Error> {
     let Some(id) = path_param(event.uri().path(), "/weights/") else {
         return json_response(404, &serde_json::json!({ "error": "not found" }));
     };
-    let Some(session) = authenticated_session(&event, &state).await? else {
-        return json_response(401, &serde_json::json!({ "error": "invalid bearer token" }));
+    let session = require_session(&event, &state).await?;
+    let snapshot = load_snapshot(&state, &session).await?;
+    let Some(entry) = snapshot
+        .weights
+        .iter()
+        .find(|entry| entry.id.to_string() == id)
+    else {
+        return json_response(
+            404,
+            &serde_json::json!({ "error": "weight entry not found" }),
+        );
     };
-    let mut payload = load_snapshot(&state, &session).await?;
-    let before = payload.weights.len();
-    payload.weights.retain(|entry| entry.id.to_string() != id);
-    if payload.weights.len() == before {
+    delete_record(&state, &session, entry.date, "weight", id).await?;
+    json_response(200, &load_snapshot(&state, &session).await?)
+}
+
+async fn bootstrap(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    let user_state = ensure_user_v2(&state, &session).await?;
+    json_response(200, &bootstrap_payload(session, user_state))
+}
+
+async fn diary_month(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let Some(month) = query_param(&event, "month").filter(|month| valid_month(month)) else {
+        return json_response(
+            400,
+            &serde_json::json!({ "error": "month must use YYYY-MM" }),
+        );
+    };
+    json_response(
+        200,
+        &load_diary(&state, &session, &format!("diary#{month}")).await?,
+    )
+}
+
+async fn update_goal_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    let profile: ProfileInput = json_body(&event)?;
+    let recommendation = match recommend_goal(&profile) {
+        Ok(value) => value,
+        Err(error) => {
+            return json_response(400, &serde_json::json!({ "error": error.to_string() }))
+        }
+    };
+    let mut user_state = ensure_user_v2(&state, &session).await?;
+    user_state.profile = profile;
+    user_state.recommendation = Some(recommendation);
+    save_user_state(&state, &session, &user_state).await?;
+    json_response(200, &bootstrap_payload(session, user_state))
+}
+
+async fn update_daily_target_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    let input: UpdateDailyTargetRequest = json_body(&event)?;
+    if !valid_daily_target(input.daily_calorie_target) {
+        return json_response(
+            400,
+            &serde_json::json!({ "error": "dailyCalorieTarget must be between 500 and 6000" }),
+        );
+    }
+    let mut user_state = ensure_user_v2(&state, &session).await?;
+    user_state.daily_calorie_target = Some(input.daily_calorie_target);
+    save_user_state(&state, &session, &user_state).await?;
+    json_response(200, &bootstrap_payload(session, user_state))
+}
+
+async fn create_food_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateFoodRequest = json_body(&event)?;
+    let entry = FoodEntry {
+        id: uuid::Uuid::new_v4(),
+        user_id: session.user_id.clone(),
+        date: input.date,
+        meal: input.meal,
+        name: input.name,
+        calories: input.calories,
+        protein_g: input.protein_g,
+        carbs_g: input.carbs_g,
+        fat_g: input.fat_g,
+        note: input.note,
+    };
+    put_record(&state, &session, &DiaryRecord::Food(entry.clone())).await?;
+    json_response(201, &entry)
+}
+
+async fn create_exercise_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateExerciseRequest = json_body(&event)?;
+    let entry = ExerciseEntry {
+        id: uuid::Uuid::new_v4(),
+        user_id: session.user_id.clone(),
+        date: input.date,
+        name: input.name,
+        calories_burned: input.calories_burned,
+        duration_minutes: input.duration_minutes,
+        note: input.note,
+    };
+    put_record(&state, &session, &DiaryRecord::Exercise(entry.clone())).await?;
+    json_response(201, &entry)
+}
+
+async fn create_weight_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateWeightRequest = json_body(&event)?;
+    let entry = WeightEntry {
+        id: uuid::Uuid::new_v4(),
+        user_id: session.user_id.clone(),
+        date: input.date,
+        weight_kg: input.weight_kg,
+        note: input.note,
+    };
+    put_record(&state, &session, &DiaryRecord::Weight(entry.clone())).await?;
+    json_response(201, &entry)
+}
+
+async fn update_food_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let Some((old_date, id)) = dated_path_params(event.uri().path(), "/v2/foods/") else {
+        return json_response(404, &serde_json::json!({ "error": "not found" }));
+    };
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateFoodRequest = json_body(&event)?;
+    let id = parse_uuid(id)?;
+    if !record_exists(&state, &session, old_date, "food", &id.to_string()).await? {
+        return json_response(404, &serde_json::json!({ "error": "food entry not found" }));
+    }
+    let entry = FoodEntry {
+        id,
+        user_id: session.user_id.clone(),
+        date: input.date,
+        meal: input.meal,
+        name: input.name,
+        calories: input.calories,
+        protein_g: input.protein_g,
+        carbs_g: input.carbs_g,
+        fat_g: input.fat_g,
+        note: input.note,
+    };
+    move_record(
+        &state,
+        &session,
+        old_date,
+        &DiaryRecord::Food(entry.clone()),
+    )
+    .await?;
+    json_response(200, &entry)
+}
+
+async fn update_exercise_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let Some((old_date, id)) = dated_path_params(event.uri().path(), "/v2/exercises/") else {
+        return json_response(404, &serde_json::json!({ "error": "not found" }));
+    };
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateExerciseRequest = json_body(&event)?;
+    let id = parse_uuid(id)?;
+    if !record_exists(&state, &session, old_date, "exercise", &id.to_string()).await? {
+        return json_response(
+            404,
+            &serde_json::json!({ "error": "exercise entry not found" }),
+        );
+    }
+    let entry = ExerciseEntry {
+        id,
+        user_id: session.user_id.clone(),
+        date: input.date,
+        name: input.name,
+        calories_burned: input.calories_burned,
+        duration_minutes: input.duration_minutes,
+        note: input.note,
+    };
+    move_record(
+        &state,
+        &session,
+        old_date,
+        &DiaryRecord::Exercise(entry.clone()),
+    )
+    .await?;
+    json_response(200, &entry)
+}
+
+async fn update_weight_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    let Some((old_date, id)) = dated_path_params(event.uri().path(), "/v2/weights/") else {
+        return json_response(404, &serde_json::json!({ "error": "not found" }));
+    };
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    let input: CreateWeightRequest = json_body(&event)?;
+    let id = parse_uuid(id)?;
+    if !record_exists(&state, &session, old_date, "weight", &id.to_string()).await? {
         return json_response(
             404,
             &serde_json::json!({ "error": "weight entry not found" }),
         );
     }
-    save_snapshot(&state, &session, &payload).await?;
-    json_response(200, &payload)
+    let entry = WeightEntry {
+        id,
+        user_id: session.user_id.clone(),
+        date: input.date,
+        weight_kg: input.weight_kg,
+        note: input.note,
+    };
+    move_record(
+        &state,
+        &session,
+        old_date,
+        &DiaryRecord::Weight(entry.clone()),
+    )
+    .await?;
+    json_response(200, &entry)
+}
+
+async fn delete_food_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    delete_record_v2(event, state, "/v2/foods/", "food").await
+}
+
+async fn delete_exercise_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    delete_record_v2(event, state, "/v2/exercises/", "exercise").await
+}
+
+async fn delete_weight_v2(event: Request, state: AppState) -> Result<Response<Body>, Error> {
+    delete_record_v2(event, state, "/v2/weights/", "weight").await
+}
+
+async fn delete_record_v2(
+    event: Request,
+    state: AppState,
+    prefix: &str,
+    kind: &str,
+) -> Result<Response<Body>, Error> {
+    let Some((date, id)) = dated_path_params(event.uri().path(), prefix) else {
+        return json_response(404, &serde_json::json!({ "error": "not found" }));
+    };
+    let session = require_session(&event, &state).await?;
+    ensure_user_v2(&state, &session).await?;
+    if !record_exists(&state, &session, date, kind, id).await? {
+        return json_response(
+            404,
+            &serde_json::json!({ "error": format!("{kind} entry not found") }),
+        );
+    }
+    delete_record(&state, &session, date, kind, id).await?;
+    empty_response(204)
 }
 
 async fn authenticated_session(
@@ -752,33 +1004,62 @@ async fn authenticated_session(
 }
 
 async fn load_snapshot(state: &AppState, session: &Session) -> Result<Snapshot, Error> {
-    if let Some(snapshot) = state
-        .store
-        .get_json::<Snapshot>(&user_pk(&session.user_id), "snapshot")
-        .await?
-    {
-        return Ok(Snapshot {
-            session: Some(session.clone()),
-            sync_status: "online".to_string(),
-            ..snapshot
-        });
-    }
-    Ok(default_snapshot(session))
+    let user_state = ensure_user_v2(state, session).await?;
+    let diary = load_diary(state, session, "diary#").await?;
+    Ok(Snapshot {
+        session: Some(session.clone()),
+        profile: user_state.profile,
+        recommendation: user_state.recommendation,
+        daily_calorie_target: user_state.daily_calorie_target,
+        foods: diary.foods,
+        exercises: diary.exercises,
+        weights: diary.weights,
+        sync_status: "online".to_string(),
+    })
 }
 
-async fn save_snapshot(
+async fn ensure_user_v2(state: &AppState, session: &Session) -> Result<UserState, Error> {
+    let pk = user_pk(&session.user_id);
+    if let Some(user_state) = state.store.get_json::<UserState>(&pk, "state").await? {
+        return Ok(user_state);
+    }
+    if let Some(snapshot) = state.store.get_json::<Snapshot>(&pk, "snapshot").await? {
+        for entry in &snapshot.foods {
+            put_record(state, session, &DiaryRecord::Food(entry.clone())).await?;
+        }
+        for entry in &snapshot.exercises {
+            put_record(state, session, &DiaryRecord::Exercise(entry.clone())).await?;
+        }
+        for entry in &snapshot.weights {
+            put_record(state, session, &DiaryRecord::Weight(entry.clone())).await?;
+        }
+        let user_state = UserState {
+            storage_version: 2,
+            profile: snapshot.profile,
+            recommendation: snapshot.recommendation,
+            daily_calorie_target: snapshot.daily_calorie_target,
+        };
+        save_user_state(state, session, &user_state).await?;
+        return Ok(user_state);
+    }
+    let user_state = default_user_state();
+    save_user_state(state, session, &user_state).await?;
+    Ok(user_state)
+}
+
+async fn save_user_state(
     state: &AppState,
     session: &Session,
-    snapshot: &Snapshot,
+    user_state: &UserState,
 ) -> Result<(), Error> {
     state
         .store
-        .put_json(&user_pk(&session.user_id), "snapshot", snapshot)
+        .put_json(&user_pk(&session.user_id), "state", user_state)
         .await?;
     Ok(())
 }
 
-fn default_snapshot(session: &Session) -> Snapshot {
+fn default_user_state() -> UserState {
     let profile = ProfileInput {
         sex: energy_core::Sex::Male,
         age_years: 34,
@@ -787,16 +1068,155 @@ fn default_snapshot(session: &Session) -> Snapshot {
         activity_level: energy_core::ActivityLevel::Moderate,
         goal_kind: energy_core::GoalKind::Lose,
     };
-    Snapshot {
-        session: Some(session.clone()),
+    UserState {
+        storage_version: 2,
         recommendation: recommend_goal(&profile).ok(),
         daily_calorie_target: None,
         profile,
-        foods: vec![],
-        exercises: vec![],
-        weights: vec![],
+    }
+}
+
+fn bootstrap_payload(session: Session, state: UserState) -> Bootstrap {
+    Bootstrap {
+        session,
+        profile: state.profile,
+        recommendation: state.recommendation,
+        daily_calorie_target: state.daily_calorie_target,
         sync_status: "online".to_string(),
     }
+}
+
+async fn load_diary(
+    state: &AppState,
+    session: &Session,
+    prefix: &str,
+) -> Result<DiaryMonth, Error> {
+    let records = state
+        .store
+        .query_json_prefix::<DiaryRecord>(&user_pk(&session.user_id), prefix)
+        .await?;
+    Ok(records
+        .into_iter()
+        .fold(DiaryMonth::default(), |mut diary, record| {
+            match record {
+                DiaryRecord::Food(entry) => diary.foods.push(entry),
+                DiaryRecord::Exercise(entry) => diary.exercises.push(entry),
+                DiaryRecord::Weight(entry) => diary.weights.push(entry),
+            }
+            diary
+        }))
+}
+
+async fn put_record(
+    state: &AppState,
+    session: &Session,
+    record: &DiaryRecord,
+) -> Result<(), Error> {
+    state
+        .store
+        .put_json(&user_pk(&session.user_id), &record_sk(record), record)
+        .await?;
+    Ok(())
+}
+
+async fn move_record(
+    state: &AppState,
+    session: &Session,
+    old_date: NaiveDate,
+    record: &DiaryRecord,
+) -> Result<(), Error> {
+    let (kind, id, _) = record_parts(record);
+    state
+        .store
+        .move_json(
+            &user_pk(&session.user_id),
+            &diary_sk(old_date, kind, &id),
+            &record_sk(record),
+            record,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn delete_record(
+    state: &AppState,
+    session: &Session,
+    date: NaiveDate,
+    kind: &str,
+    id: &str,
+) -> Result<(), Error> {
+    state
+        .store
+        .delete(&user_pk(&session.user_id), &diary_sk(date, kind, id))
+        .await?;
+    Ok(())
+}
+
+async fn record_exists(
+    state: &AppState,
+    session: &Session,
+    date: NaiveDate,
+    kind: &str,
+    id: &str,
+) -> Result<bool, Error> {
+    let exists = state
+        .store
+        .get_json::<DiaryRecord>(&user_pk(&session.user_id), &diary_sk(date, kind, id))
+        .await?;
+    Ok(exists.is_some())
+}
+
+fn record_sk(record: &DiaryRecord) -> String {
+    let (kind, id, date) = record_parts(record);
+    diary_sk(date, kind, &id)
+}
+
+fn record_parts(record: &DiaryRecord) -> (&'static str, String, NaiveDate) {
+    match record {
+        DiaryRecord::Food(entry) => ("food", entry.id.to_string(), entry.date),
+        DiaryRecord::Exercise(entry) => ("exercise", entry.id.to_string(), entry.date),
+        DiaryRecord::Weight(entry) => ("weight", entry.id.to_string(), entry.date),
+    }
+}
+
+fn diary_sk(date: NaiveDate, kind: &str, id: &str) -> String {
+    format!("diary#{date}#{kind}#{id}")
+}
+
+fn valid_month(month: &str) -> bool {
+    month.len() == 7
+        && month.as_bytes().get(4) == Some(&b'-')
+        && NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d").is_ok()
+}
+
+fn query_param<'a>(event: &'a Request, name: &str) -> Option<&'a str> {
+    event.uri().query()?.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then_some(value)
+    })
+}
+
+fn dated_path_params<'a>(path: &'a str, prefix: &str) -> Option<(NaiveDate, &'a str)> {
+    let rest = path.strip_prefix(prefix)?;
+    let (date, id) = rest.split_once('/')?;
+    if id.is_empty() || id.contains('/') {
+        return None;
+    }
+    Some((NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?, id))
+}
+
+fn parse_uuid(id: &str) -> Result<uuid::Uuid, Error> {
+    Ok(uuid::Uuid::parse_str(id)?)
+}
+
+fn valid_daily_target(target: u16) -> bool {
+    (500..=6000).contains(&target)
+}
+
+async fn require_session(event: &Request, state: &AppState) -> Result<Session, Error> {
+    authenticated_session(event, state)
+        .await?
+        .ok_or_else(|| Box::new(InvalidBearerToken) as Error)
 }
 
 fn json_body<T>(event: &Request) -> Result<T, Error>
@@ -938,6 +1358,28 @@ mod tests {
         assert_eq!(path_param("/foods/", "/foods/"), None);
         assert_eq!(path_param("/foods/abc/def", "/foods/"), None);
         assert_eq!(path_param("/exercises/abc", "/foods/"), None);
+    }
+
+    #[test]
+    fn validates_months_and_dated_record_paths() {
+        assert!(valid_month("2026-06"));
+        assert!(!valid_month("2026-13"));
+        assert!(!valid_month("2026-6"));
+        let (date, id) = dated_path_params(
+            "/v2/foods/2026-06-12/550e8400-e29b-41d4-a716-446655440000",
+            "/v2/foods/",
+        )
+        .unwrap();
+        assert_eq!(date.to_string(), "2026-06-12");
+        assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000");
+        assert!(dated_path_params("/v2/foods/2026-06-12/id/extra", "/v2/foods/").is_none());
+    }
+
+    #[test]
+    fn creates_queryable_diary_sort_keys() {
+        let date = NaiveDate::from_ymd_opt(2026, 6, 12).unwrap();
+        assert_eq!(diary_sk(date, "food", "id"), "diary#2026-06-12#food#id");
+        assert!(diary_sk(date, "food", "id").starts_with("diary#2026-06"));
     }
 
     #[test]

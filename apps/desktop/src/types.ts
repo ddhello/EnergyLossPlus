@@ -73,3 +73,17 @@ export interface AppSnapshot {
   weights: WeightEntry[];
   syncStatus: "online" | "cached" | "offline";
 }
+
+export interface AppBootstrap {
+  session: Session;
+  profile: ProfileInput;
+  recommendation?: GoalRecommendation;
+  dailyCalorieTarget?: number;
+  syncStatus: "online" | "cached" | "offline";
+}
+
+export interface DiaryMonth {
+  foods: FoodEntry[];
+  exercises: ExerciseEntry[];
+  weights: WeightEntry[];
+}

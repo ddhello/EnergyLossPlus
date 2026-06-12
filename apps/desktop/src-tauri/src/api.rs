@@ -1,6 +1,6 @@
-use crate::cache::CachedSnapshot;
+use crate::cache::{Bootstrap, DiaryMonth};
 use anyhow::Context;
-use energy_core::ProfileInput;
+use energy_core::{ExerciseEntry, FoodEntry, ProfileInput, WeightEntry};
 use reqwest::header::AUTHORIZATION;
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -22,8 +22,8 @@ impl ApiClient {
         }
     }
 
-    pub async fn snapshot(&self, token: &str) -> anyhow::Result<CachedSnapshot> {
-        let url = format!("{}/snapshot", self.base_url);
+    pub async fn bootstrap(&self, token: &str) -> anyhow::Result<Bootstrap> {
+        let url = format!("{}/v2/bootstrap", self.base_url);
         let response = self
             .client
             .get(&url)
@@ -37,9 +37,14 @@ impl ApiClient {
         }
 
         response
-            .json::<CachedSnapshot>()
+            .json::<Bootstrap>()
             .await
-            .context("failed to decode snapshot")
+            .context("failed to decode bootstrap")
+    }
+
+    pub async fn diary_month(&self, token: &str, month: &str) -> anyhow::Result<DiaryMonth> {
+        self.get_json(&format!("/v2/diary?month={month}"), token)
+            .await
     }
 
     pub async fn auth_post<T>(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<T>
@@ -71,104 +76,125 @@ impl ApiClient {
         &self,
         token: &str,
         profile: &ProfileInput,
-    ) -> anyhow::Result<CachedSnapshot> {
-        self.send_json("PUT", "/goal", token, profile).await
+    ) -> anyhow::Result<Bootstrap> {
+        self.send_json("PUT", "/v2/goal", token, profile).await
     }
 
     pub async fn update_daily_target(
         &self,
         token: &str,
         daily_calorie_target: u16,
-    ) -> anyhow::Result<CachedSnapshot> {
+    ) -> anyhow::Result<Bootstrap> {
         self.send_json(
             "PUT",
-            "/daily-target",
+            "/v2/daily-target",
             token,
             &serde_json::json!({ "dailyCalorieTarget": daily_calorie_target }),
         )
         .await
     }
 
-    pub async fn create_food<T>(&self, token: &str, entry: &T) -> anyhow::Result<CachedSnapshot>
+    pub async fn create_food<T>(&self, token: &str, entry: &T) -> anyhow::Result<FoodEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("POST", "/foods", token, entry).await
+        self.send_json("POST", "/v2/foods", token, entry).await
     }
 
     pub async fn update_food<T>(
         &self,
         token: &str,
         id: &str,
+        original_date: &str,
         entry: &T,
-    ) -> anyhow::Result<CachedSnapshot>
+    ) -> anyhow::Result<FoodEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("PUT", &format!("/foods/{id}"), token, entry)
-            .await
+        self.send_json(
+            "PUT",
+            &format!("/v2/foods/{original_date}/{id}"),
+            token,
+            entry,
+        )
+        .await
     }
 
-    pub async fn delete_food(&self, token: &str, id: &str) -> anyhow::Result<CachedSnapshot> {
-        self.delete(&format!("/foods/{id}"), token).await
+    pub async fn delete_food(&self, token: &str, id: &str, date: &str) -> anyhow::Result<()> {
+        self.delete(&format!("/v2/foods/{date}/{id}"), token).await
     }
 
-    pub async fn create_exercise<T>(&self, token: &str, entry: &T) -> anyhow::Result<CachedSnapshot>
+    pub async fn create_exercise<T>(&self, token: &str, entry: &T) -> anyhow::Result<ExerciseEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("POST", "/exercises", token, entry).await
+        self.send_json("POST", "/v2/exercises", token, entry).await
     }
 
     pub async fn update_exercise<T>(
         &self,
         token: &str,
         id: &str,
+        original_date: &str,
         entry: &T,
-    ) -> anyhow::Result<CachedSnapshot>
+    ) -> anyhow::Result<ExerciseEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("PUT", &format!("/exercises/{id}"), token, entry)
+        self.send_json(
+            "PUT",
+            &format!("/v2/exercises/{original_date}/{id}"),
+            token,
+            entry,
+        )
+        .await
+    }
+
+    pub async fn delete_exercise(&self, token: &str, id: &str, date: &str) -> anyhow::Result<()> {
+        self.delete(&format!("/v2/exercises/{date}/{id}"), token)
             .await
     }
 
-    pub async fn delete_exercise(&self, token: &str, id: &str) -> anyhow::Result<CachedSnapshot> {
-        self.delete(&format!("/exercises/{id}"), token).await
-    }
-
-    pub async fn create_weight<T>(&self, token: &str, entry: &T) -> anyhow::Result<CachedSnapshot>
+    pub async fn create_weight<T>(&self, token: &str, entry: &T) -> anyhow::Result<WeightEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("POST", "/weights", token, entry).await
+        self.send_json("POST", "/v2/weights", token, entry).await
     }
 
     pub async fn update_weight<T>(
         &self,
         token: &str,
         id: &str,
+        original_date: &str,
         entry: &T,
-    ) -> anyhow::Result<CachedSnapshot>
+    ) -> anyhow::Result<WeightEntry>
     where
         T: Serialize + ?Sized,
     {
-        self.send_json("PUT", &format!("/weights/{id}"), token, entry)
+        self.send_json(
+            "PUT",
+            &format!("/v2/weights/{original_date}/{id}"),
+            token,
+            entry,
+        )
+        .await
+    }
+
+    pub async fn delete_weight(&self, token: &str, id: &str, date: &str) -> anyhow::Result<()> {
+        self.delete(&format!("/v2/weights/{date}/{id}"), token)
             .await
     }
 
-    pub async fn delete_weight(&self, token: &str, id: &str) -> anyhow::Result<CachedSnapshot> {
-        self.delete(&format!("/weights/{id}"), token).await
-    }
-
-    async fn send_json<T>(
+    async fn send_json<R, T>(
         &self,
         method: &str,
         path: &str,
         token: &str,
         body: &T,
-    ) -> anyhow::Result<CachedSnapshot>
+    ) -> anyhow::Result<R>
     where
+        R: DeserializeOwned,
         T: Serialize + ?Sized,
     {
         let request = match method {
@@ -193,12 +219,31 @@ impl ApiClient {
         }
 
         response
-            .json::<CachedSnapshot>()
+            .json::<R>()
             .await
             .context("failed to decode updated snapshot")
     }
 
-    async fn delete(&self, path: &str, token: &str) -> anyhow::Result<CachedSnapshot> {
+    async fn get_json<R>(&self, path: &str, token: &str) -> anyhow::Result<R>
+    where
+        R: DeserializeOwned,
+    {
+        let response = self
+            .client
+            .get(format!("{}{}", self.base_url, path))
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            anyhow::bail!("API read failed with {}", response.status());
+        }
+        response
+            .json::<R>()
+            .await
+            .context("failed to decode API response")
+    }
+
+    async fn delete(&self, path: &str, token: &str) -> anyhow::Result<()> {
         let response = self
             .client
             .delete(format!("{}{}", self.base_url, path))
@@ -216,9 +261,6 @@ impl ApiClient {
             anyhow::bail!("API delete failed with {}", response.status());
         }
 
-        response
-            .json::<CachedSnapshot>()
-            .await
-            .context("failed to decode updated snapshot")
+        Ok(())
     }
 }
